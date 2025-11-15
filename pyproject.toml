@@ -52,14 +52,8 @@ dependencies = [
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
-# [tool.setuptools.packages.find]
-# where = ["src"]
-
-# [tool.setuptools.dynamic]
-# version = { attr = "scannerai.__version__" }
-
-# [tool.setuptools.package-data]
-# scannerai = ["_config/*.toml"]
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [project.optional-dependencies]
 test = [
