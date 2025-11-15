@@ -689,10 +689,13 @@ def main():
         st.header("Upload & Navigation")
 
         # File uploader - always visible
+        # Use a key that can be reset to clear the uploader
+        uploader_key = st.session_state.get("file_uploader_key", "file_uploader")
         uploaded_files = st.file_uploader(
             "Upload receipt images",
             type=["png", "jpg", "jpeg", "pdf"],
             accept_multiple_files=True,
+            key=uploader_key,
         )
 
         # Process button - always visible when files are uploaded, but disabled during processing
@@ -735,7 +738,9 @@ def main():
                 st.session_state.processing_queue = []
                 st.session_state.processing_active = False
                 st.session_state.process_counts = {"completed": 0, "total": 0}
-                # Clear uploaded files by rerunning
+                # Reset file uploader by changing its key
+                st.session_state.file_uploader_key = f"file_uploader_{st.session_state.get('uploader_reset_counter', 0) + 1}"
+                st.session_state.uploader_reset_counter = st.session_state.get("uploader_reset_counter", 0) + 1
                 st.rerun()
             st.divider()
         
