@@ -725,12 +725,14 @@ def main():
                 autosave_results()
                 force_rerun()
 
-        # Home button - show when results exist (processing complete or not)
+        # Home button - show when results exist and processing is complete
         has_results = bool(st.session_state.results)
         processing_active = st.session_state.get("processing_active", False)
+        processing_queue_empty = not st.session_state.get("processing_queue", [])
         
-        # Show buttons when we have results and processing is not active
-        if has_results and not processing_active:
+        # Show buttons when we have results and processing is not active (or queue is empty)
+        processing_complete = not processing_active or (processing_queue_empty and has_results)
+        if has_results and processing_complete:
             if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
                 st.session_state.results = []
                 st.session_state.current_index = 0
@@ -745,8 +747,8 @@ def main():
                 st.rerun()
             st.divider()
         
-        # Navigation with state preservation - show when results exist and processing is not active
-        if has_results and not processing_active:
+        # Navigation with state preservation - show when results exist and processing is complete
+        if has_results and processing_complete:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Previous") and st.session_state.current_index > 0:
@@ -758,8 +760,8 @@ def main():
                     st.session_state.current_index += 1
             st.write(f"Receipt {st.session_state.current_index + 1} of {len(st.session_state.results)}")
 
-        # Export options - show when results exist and processing is not active
-        if has_results and not processing_active:
+        # Export options - show when results exist and processing is complete
+        if has_results and processing_complete:
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
@@ -911,6 +913,8 @@ def main():
             else:
                 st.session_state.processing_active = False
                 st.success("Processing complete.")
+                # Force rerun to update sidebar buttons immediately
+                st.rerun()
 
         # Only show "Completed */*" when processing is active or just completed (and on first image)
         counts = st.session_state.process_counts
