@@ -1,6 +1,6 @@
 # Contributing to ScannerAI
 
-Thank you for taking the time to contribute to ScannerAI! This project is a community-driven fork of the ONS Data Science Campus receipt scanner. Together we can keep the tool robust, privacy-preserving, and easy to use.
+Thank you for taking the time to contribute to ScannerAI! This project is a community-maintained fork of the [receipt_scanner](https://github.com/datasciencecampus/receipt_scanner) project originally developed by the Data Science Campus at the Office for National Statistics. Together we can keep the tool robust, privacy-preserving, and easy to use.
 
 ## Ways to Help
 
@@ -20,8 +20,8 @@ Thank you for taking the time to contribute to ScannerAI! This project is a comm
 
 1. **Set up environment**
    ```bash
-   git clone https://github.com/<your-org>/scannerai.git
-   cd scannerai/receipt_scanner
+   git clone https://github.com/rijff24/receiptAI.git
+   cd receipt_scanner
    python -m venv scanner-venv
    scanner-venv\Scripts\activate  # or source scanner-venv/bin/activate
    pip install -e ".[dev]"

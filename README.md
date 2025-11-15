@@ -1,5 +1,3 @@
-<img src="https://github.com/datasciencecampus/awesome-campus/blob/master/ons_dsc_logo.png"/>
-
 # ScannerAI - Receipt Scanner and Classifier
 ScannerAI is a Python application that processes retail receipts using computer vision and AI to extract, classify and analyze receipt data. It features a graphical user interface for viewing and editing receipt information with support for COICOP (Classification of Individual Consumption According to Purchase) code classification.
 
@@ -21,7 +19,7 @@ ScannerAI is a Python application that processes retail receipts using computer 
 
 **1. Clone the repository**
 ``` bash
-git clone https://github.com/datasciencecampus/receipt_scanner.git
+git clone https://github.com/rijff24/receiptAI.git
 cd receipt_scanner
 ```
 
@@ -186,9 +184,9 @@ This repository contains a configuration of pre-commit hooks. These are language
 - `.gitignore` excludes autosaves, local configs, and credential files by default—please keep it that way when contributing.
 - See `SECURITY.md` for the coordinated disclosure process.
 
-# Data Science Campus
+# Credits
 
-At the [Data Science Campus](https://datasciencecampus.ons.gov.uk/about-us/) we apply data science, and build skills, for public good across the UK and internationally. Get in touch with the Campus at [datasciencecampus\@ons.gov.uk](datasciencecampus@ons.gov.uk).
+This project is a community-maintained fork of the [receipt_scanner](https://github.com/datasciencecampus/receipt_scanner) project originally developed by the [Data Science Campus](https://datasciencecampus.ons.gov.uk/about-us/) at the Office for National Statistics (ONS). The original project applied data science for public good across the UK and internationally.
 
 # License
 

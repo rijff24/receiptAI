@@ -2,7 +2,7 @@
 name = "scannerai"
 description = "An AI-assisted tool for COICOP classification."
 authors = [
-    { name = "Data Science Campus", email = "datasciencecampus@ons.gov.uk" }
+    { name = "Community Maintained", email = "" }
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
