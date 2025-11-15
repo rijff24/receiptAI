@@ -722,7 +722,7 @@ def main():
                             ),
                             "notes": result["receipt_data"].get("notes", ""),
                         },
-                        "file_name": result["file_name"],
+                        "file_name": result.get("file_name") or os.path.basename(result["receipt_data"].get("receipt_pathfile", "")),
                     }
                     for result in st.session_state.results
                 ]
@@ -733,6 +733,7 @@ def main():
                 rows = []
                 for result in st.session_state.results:
                     receipt_data = result["receipt_data"]
+                    file_name = result.get("file_name") or os.path.basename(receipt_data.get("receipt_pathfile", ""))
                     if not receipt_data["items"]:
                         rows.append(
                             {
@@ -741,7 +742,7 @@ def main():
                                 "code_desc": "",
                                 "price": "",
                                 "prob": "",
-                                "file_name": result["file_name"],
+                                "file_name": file_name,
                                 "shop_name": receipt_data.get("shop_name", ""),
                                 "total_amount": receipt_data.get("total_amount", ""),
                                 "payment_mode": receipt_data.get("payment_mode", ""),
@@ -757,7 +758,7 @@ def main():
                                     "code_desc": item.get("coicop_desc", ""),
                                     "price": item.get("price", ""),
                                     "prob": item.get("confidence", ""),
-                                    "file_name": result["file_name"],
+                                    "file_name": file_name,
                                     "shop_name": receipt_data.get("shop_name", ""),
                                     "total_amount": receipt_data.get("total_amount", ""),
                                     "payment_mode": receipt_data.get("payment_mode", ""),
