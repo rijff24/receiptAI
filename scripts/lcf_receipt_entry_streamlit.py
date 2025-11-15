@@ -151,30 +151,7 @@ def render_settings_panel():
             f"Settings are stored locally at: `{settings_manager.settings_path}`"
         )
         
-        # Handle browse button clicks outside the form
-        # Check for selected paths from browse buttons and update snapshot
-        if "classifier_path_selected" in st.session_state:
-            snapshot["classifier_model_path"] = st.session_state["classifier_path_selected"]
-            settings_manager.update_values({"classifier_model_path": st.session_state["classifier_path_selected"]})
-            del st.session_state["classifier_path_selected"]
-            st.rerun()
-        if "encoder_path_selected" in st.session_state:
-            snapshot["label_encoder_path"] = st.session_state["encoder_path_selected"]
-            settings_manager.update_values({"label_encoder_path": st.session_state["encoder_path_selected"]})
-            del st.session_state["encoder_path_selected"]
-            st.rerun()
-        if "tesseract_path_selected" in st.session_state:
-            snapshot["tesseract_cmd_path"] = st.session_state["tesseract_path_selected"]
-            settings_manager.update_values({"tesseract_cmd_path": st.session_state["tesseract_path_selected"]})
-            del st.session_state["tesseract_path_selected"]
-            st.rerun()
-        if "google_creds_path_selected" in st.session_state:
-            snapshot["google_credentials_path"] = st.session_state["google_creds_path_selected"]
-            settings_manager.update_values({"google_credentials_path": st.session_state["google_creds_path_selected"]})
-            del st.session_state["google_creds_path_selected"]
-            st.rerun()
-        
-        # Refresh snapshot after potential updates
+        # Refresh snapshot
         snapshot = settings_manager.get_settings_snapshot()
         
         # Settings inputs (no form wrapper)
@@ -201,49 +178,33 @@ def render_settings_panel():
 
         st.divider()
         
-        # Classifier model path with browse button
+        # Classifier model path with file uploader
         classifier_path_value = snapshot.get("classifier_model_path", "")
         classifier_model_path = st.text_input(
             "Classifier model path",
             value=classifier_path_value,
-            help="Path to your trained classification model file (.sav). Used for COICOP code classification. If not provided, COICOP and confidence columns will display None.",
+            help="Path to your trained classification model file (.sav). Used for COICOP code classification. If not provided, COICOP and confidence columns will display None. You can also upload a file below.",
         )
-        if st.button("Browse Classifier Model", key="browse_classifier"):
-            if tk and filedialog:
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                selected = filedialog.askopenfilename(
-                    title="Select Classifier Model",
-                    filetypes=[("Model Files", "*.sav"), ("All Files", "*.*")],
-                    initialdir=os.path.dirname(classifier_path_value) if classifier_path_value and os.path.exists(classifier_path_value) else None,
-                )
-                root.destroy()
-                if selected:
-                    st.session_state["classifier_path_selected"] = selected
-                    st.rerun()
+        classifier_model_upload = st.file_uploader(
+            "Upload Classifier Model",
+            type=["sav"],
+            key="classifier_model_uploader",
+            help="Upload a .sav classifier model file. The file will be saved to your ScannerAI settings folder.",
+        )
         
-        # Label encoder path with browse button
+        # Label encoder path with file uploader
         encoder_path_value = snapshot.get("label_encoder_path", "")
         label_encoder_path = st.text_input(
             "Label encoder path",
             value=encoder_path_value,
-            help="Path to your label encoder file (.pkl). This should be generated together with the trained classifier model. If not available, COICOP classification will not work.",
+            help="Path to your label encoder file (.pkl). This should be generated together with the trained classifier model. If not available, COICOP classification will not work. You can also upload a file below.",
         )
-        if st.button("Browse Label Encoder", key="browse_encoder"):
-            if tk and filedialog:
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                selected = filedialog.askopenfilename(
-                    title="Select Label Encoder",
-                    filetypes=[("Pickle Files", "*.pkl"), ("All Files", "*.*")],
-                    initialdir=os.path.dirname(encoder_path_value) if encoder_path_value and os.path.exists(encoder_path_value) else None,
-                )
-                root.destroy()
-                if selected:
-                    st.session_state["encoder_path_selected"] = selected
-                    st.rerun()
+        label_encoder_upload = st.file_uploader(
+            "Upload Label Encoder",
+            type=["pkl"],
+            key="label_encoder_uploader",
+            help="Upload a .pkl label encoder file. The file will be saved to your ScannerAI settings folder.",
+        )
         
         # Tesseract path - only show for model 1
         if ocr_model == 1:
@@ -251,22 +212,8 @@ def render_settings_panel():
             tesseract_cmd_path = st.text_input(
                 "Tesseract executable path",
                 value=tesseract_path_value,
-                help="Path to the Tesseract OCR executable (tesseract.exe on Windows, tesseract on Linux/Mac). Required for Tesseract + GPT-3.5 OCR model. Example: C:/Program Files/Tesseract-OCR/tesseract.exe",
+                help="Path to the Tesseract OCR executable (tesseract.exe on Windows, tesseract on Linux/Mac). Required for Tesseract + GPT-3.5 OCR model. Example: C:/Program Files/Tesseract-OCR/tesseract.exe. Note: Tesseract must be installed on the system.",
             )
-            if st.button("Browse Tesseract Executable", key="browse_tesseract"):
-                if tk and filedialog:
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    selected = filedialog.askopenfilename(
-                        title="Select Tesseract Executable",
-                        filetypes=[("Executable", "*.exe"), ("All Files", "*.*")] if os.name == "nt" else [("All Files", "*.*")],
-                        initialdir=os.path.dirname(tesseract_path_value) if tesseract_path_value and os.path.exists(tesseract_path_value) else None,
-                    )
-                    root.destroy()
-                    if selected:
-                        st.session_state["tesseract_path_selected"] = selected
-                        st.rerun()
         else:
             tesseract_cmd_path = snapshot.get("tesseract_cmd_path", "")
         
@@ -276,22 +223,8 @@ def render_settings_panel():
             google_credentials_path = st.text_input(
                 "Google credentials JSON path",
                 value=google_creds_value,
-                help="Path to your Google service account JSON file. Required for Gemini OCR. This file contains credentials for accessing Google Cloud services.",
+                help="Path to your Google service account JSON file. Required for Gemini OCR. This file contains credentials for accessing Google Cloud services. You can also upload a file below.",
             )
-            if st.button("Browse Google Credentials", key="browse_google_creds"):
-                if tk and filedialog:
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    selected = filedialog.askopenfilename(
-                        title="Select Google Credentials JSON",
-                        filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
-                        initialdir=os.path.dirname(google_creds_value) if google_creds_value and os.path.exists(google_creds_value) else None,
-                    )
-                    root.destroy()
-                    if selected:
-                        st.session_state["google_creds_path_selected"] = selected
-                        st.rerun()
             
             google_credentials_upload = st.file_uploader(
                 "Upload Google service account JSON",
@@ -383,6 +316,21 @@ def render_settings_panel():
                 "google_credentials_path": google_credentials_path.strip(),
             }
 
+            # Handle uploaded classifier model
+            if classifier_model_upload is not None:
+                classifier_path = settings_manager.settings_dir / "classifier_model.sav"
+                classifier_path.write_bytes(classifier_model_upload.getvalue())
+                settings_manager.secure_file(classifier_path)
+                updates["classifier_model_path"] = str(classifier_path)
+
+            # Handle uploaded label encoder
+            if label_encoder_upload is not None:
+                encoder_path = settings_manager.settings_dir / "label_encoder.pkl"
+                encoder_path.write_bytes(label_encoder_upload.getvalue())
+                settings_manager.secure_file(encoder_path)
+                updates["label_encoder_path"] = str(encoder_path)
+
+            # Handle uploaded Google credentials
             if google_credentials_upload is not None:
                 credentials_path = settings_manager.settings_dir / "google_credentials.json"
                 credentials_path.write_bytes(google_credentials_upload.getvalue())
