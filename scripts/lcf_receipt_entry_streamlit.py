@@ -725,11 +725,12 @@ def main():
                 autosave_results()
                 force_rerun()
 
-        # Home button - show when processing is complete and results exist
-        processing_complete = not st.session_state.get("processing_active", False)
+        # Home button - show when results exist (processing complete or not)
         has_results = bool(st.session_state.results)
+        processing_active = st.session_state.get("processing_active", False)
         
-        if processing_complete and has_results:
+        # Show buttons when we have results and processing is not active
+        if has_results and not processing_active:
             if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
                 st.session_state.results = []
                 st.session_state.current_index = 0
@@ -744,8 +745,8 @@ def main():
                 st.rerun()
             st.divider()
         
-        # Navigation with state preservation - show when processing is complete and results exist
-        if processing_complete and has_results:
+        # Navigation with state preservation - show when results exist and processing is not active
+        if has_results and not processing_active:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Previous") and st.session_state.current_index > 0:
@@ -757,8 +758,8 @@ def main():
                     st.session_state.current_index += 1
             st.write(f"Receipt {st.session_state.current_index + 1} of {len(st.session_state.results)}")
 
-        # Export options - show when processing is complete and results exist
-        if processing_complete and has_results:
+        # Export options - show when results exist and processing is not active
+        if has_results and not processing_active:
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
