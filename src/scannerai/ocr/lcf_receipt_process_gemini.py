@@ -80,8 +80,12 @@ class LCFReceiptProcessGemini:
         if debug_mode:  # Use the passed debug_mode parameter
             opencv_img = np.array(image)
             opencv_img = opencv_img[:, :, ::-1].copy()
-            cv2.imshow(f"input image: {file_path}", opencv_img)
-            cv2.waitKey(0)
+            try:
+                cv2.imshow(f"input image: {file_path}", opencv_img)
+                cv2.waitKey(0)
+            except cv2.error:
+                # GUI functions not available in headless environments (e.g., Streamlit Cloud)
+                print(f"[DEBUG] Cannot display image in headless environment: {file_path}")
 
         if enable_price_count:
             print("input image size: ", image.size)
