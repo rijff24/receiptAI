@@ -688,15 +688,22 @@ def main():
     with st.sidebar:
         st.header("Upload & Navigation")
 
-        # File uploader
+        # File uploader - always visible
         uploaded_files = st.file_uploader(
             "Upload receipt images",
             type=["png", "jpg", "jpeg", "pdf"],
             accept_multiple_files=True,
         )
 
+        # Process button - always visible when files are uploaded, but disabled during processing
         if uploaded_files:
-            if st.button("Process Uploaded Files"):
+            processing_active = st.session_state.get("processing_active", False)
+            if st.button(
+                "Process Uploaded Files",
+                disabled=processing_active,
+                use_container_width=True,
+                help="Start processing uploaded files" if not processing_active else "Processing in progress..."
+            ):
                 files_data = [
                     {"name": file.name, "data": file.getvalue()}
                     for file in uploaded_files
