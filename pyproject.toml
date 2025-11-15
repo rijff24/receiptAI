@@ -2,7 +2,7 @@
 name = "scannerai"
 description = "An AI-assisted tool for COICOP classification."
 authors = [
-    { name = "Community Maintained", email = "" }
+    { name = "Community Maintained" }
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
