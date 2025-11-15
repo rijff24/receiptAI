@@ -169,6 +169,11 @@ def render_settings_panel():
             "Enable token price counting",
             value=snapshot.get("enable_price_count", False),
         )
+        enable_item_capture = st.toggle(
+            "Enable item capture and editing",
+            value=snapshot.get("enable_item_capture", True),
+            help="When enabled, you can view, add, edit, and delete individual items from receipts.",
+        )
 
         st.divider()
         
@@ -304,6 +309,7 @@ def render_settings_panel():
                 "enable_preprocessing": enable_preprocessing,
                 "save_processed_image": save_processed_image,
                 "enable_price_count": enable_price_count,
+                "enable_item_capture": enable_item_capture,
                 "classifier_model_path": classifier_model_path.strip(),
                 "label_encoder_path": label_encoder_path.strip(),
                 "tesseract_cmd_path": tesseract_cmd_path.strip(),
@@ -692,6 +698,18 @@ def main():
                 autosave_results()
                 force_rerun()
 
+        # Home button
+        if st.session_state.results:
+            if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
+                st.session_state.results = []
+                st.session_state.current_index = 0
+                st.session_state.receipt_status = []
+                st.session_state.failed_receipts = []
+                st.session_state.processing_queue = []
+                st.session_state.processing_active = False
+                st.rerun()
+            st.divider()
+        
         # Navigation with state preservation
         if st.session_state.results:
             col1, col2 = st.columns(2)
@@ -1323,9 +1341,83 @@ def main():
             )
             receipt_data["notes"] = notes_value.strip()
 
-            # Items table notice
+            # Items section
             st.subheader("Items")
-            st.info("Item capture has been disabled for this workflow.")
+            
+            # Get item capture setting
+            settings_manager = get_settings_manager()
+            snapshot = settings_manager.get_settings_snapshot()
+            enable_item_capture = snapshot.get("enable_item_capture", True)
+            
+            if enable_item_capture:
+                # Ensure items list exists
+                if "items" not in receipt_data:
+                    receipt_data["items"] = []
+                if not isinstance(receipt_data["items"], list):
+                    receipt_data["items"] = []
+                
+                items = receipt_data["items"]
+                
+                # Display items in an editable table
+                if items:
+                    # Create DataFrame for display
+                    items_data = []
+                    for idx, item in enumerate(items):
+                        items_data.append({
+                            "Item Name": item.get("item_name", item.get("name", "")),
+                            "Price": item.get("price", ""),
+                            "COICOP": item.get("coicop", item.get("code", "")),
+                            "COICOP Desc": item.get("coicop_desc", item.get("code_desc", "")),
+                            "Confidence": item.get("confidence", item.get("prob", "")),
+                        })
+                    
+                    items_df = pd.DataFrame(items_data)
+                    st.dataframe(items_df, use_container_width=True, hide_index=False)
+                    
+                    # Delete item buttons
+                    st.write("**Delete Items:**")
+                    delete_cols = st.columns(min(len(items), 5))
+                    for idx, item in enumerate(items):
+                        col_idx = idx % 5
+                        with delete_cols[col_idx]:
+                            if st.button(f"Delete #{idx+1}", key=f"delete_item_{current_index}_{idx}", use_container_width=True):
+                                items.pop(idx)
+                                autosave_results()
+                                st.rerun()
+                else:
+                    st.info("No items found. Add items below.")
+                
+                st.divider()
+                
+                # Add new item form
+                with st.expander("➕ Add New Item", expanded=False):
+                    new_item_cols = st.columns(2)
+                    with new_item_cols[0]:
+                        new_item_name = st.text_input("Item Name", key=f"new_item_name_{current_index}")
+                        new_item_price = st.text_input("Price", key=f"new_item_price_{current_index}", help="Enter price as number (e.g., 5.99)")
+                        new_item_coicop = st.text_input("COICOP Code", key=f"new_item_coicop_{current_index}")
+                    with new_item_cols[1]:
+                        new_item_coicop_desc = st.text_input("COICOP Description", key=f"new_item_coicop_desc_{current_index}")
+                        new_item_confidence = st.text_input("Confidence", key=f"new_item_confidence_{current_index}", help="Optional: confidence score")
+                    
+                    if st.button("Add Item", key=f"add_item_{current_index}", use_container_width=True):
+                        if new_item_name.strip():
+                            new_item = {
+                                "item_name": new_item_name.strip(),
+                                "price": new_item_price.strip() if new_item_price.strip() else None,
+                                "coicop": new_item_coicop.strip() if new_item_coicop.strip() else None,
+                                "coicop_desc": new_item_coicop_desc.strip() if new_item_coicop_desc.strip() else None,
+                                "confidence": new_item_confidence.strip() if new_item_confidence.strip() else None,
+                            }
+                            items.append(new_item)
+                            receipt_data["items"] = items
+                            autosave_results()
+                            st.success(f"Added item: {new_item_name}")
+                            st.rerun()
+                        else:
+                            st.warning("Please enter at least an item name.")
+            else:
+                st.info("Item capture has been disabled. Enable it in Application Settings to view and edit items.")
                     
     else:
         st.info("Upload receipt images to begin processing")

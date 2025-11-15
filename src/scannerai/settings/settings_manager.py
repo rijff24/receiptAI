@@ -67,6 +67,7 @@ class SettingsManager:
             "enable_preprocessing": False,
             "save_processed_image": False,
             "enable_price_count": False,
+            "enable_item_capture": True,  # Default to enabled
             "classifier_model_path": default_classifier,
             "label_encoder_path": default_encoder,
             "tesseract_cmd_path": "",
