@@ -1,0 +1,11 @@
+﻿DEBUG_MODE=False
+ENABLE_PREPROCESSING=False
+SAVE_PROCESSED_IMAGE=False
+ENABLE_PRICE_COUNT=False
+OCR_MODEL=2
+CLASSIFIER_MODEL_PATH="/absolute/path/to/LRCountVectorizer.sav"
+LABEL_ENCODER_PATH="/absolute/path/to/encoder.pkl"
+GEMINI_API_KEY_PATH=
+OPENAI_API_KEY_PATH="/absolute/path/to/openai_api_key.txt"
+GOOGLE_CREDENTIALS_PATH=
+TESSERACT_CMD_PATH="C:/Program Files/Tesseract-OCR/tesseract.exe"

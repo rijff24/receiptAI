@@ -34,6 +34,21 @@ def _default_settings_dir() -> Path:
     return settings_dir
 
 
+def _get_default_training_files() -> tuple[str, str]:
+    """Get default paths to training files in the package."""
+    # Get the path to this file, then navigate to the trainedModels directory
+    current_file = Path(__file__)
+    # settings_manager.py is in src/scannerai/settings/
+    # trainedModels is in src/scannerai/classifiers/trainedModels/
+    package_root = current_file.parent.parent.parent
+    trained_models_dir = package_root / "classifiers" / "trainedModels"
+    
+    classifier_path = str((trained_models_dir / "LRCountVectorizer.sav").resolve())
+    encoder_path = str((trained_models_dir / "encoder.pkl").resolve())
+    
+    return classifier_path, encoder_path
+
+
 class SettingsManager:
     """Persist user settings and API keys locally with optional encryption."""
 
@@ -42,22 +57,26 @@ class SettingsManager:
     KEYRING_SERVICE = "ScannerAI"
     KEYRING_USER = "settings"
 
-    DEFAULTS: Dict[str, Any] = {
-        "ocr_model": 2,  # Default to GPT-4 Vision
-        "debug_mode": False,
-        "enable_preprocessing": False,
-        "save_processed_image": False,
-        "enable_price_count": False,
-        "classifier_model_path": "",
-        "label_encoder_path": "",
-        "tesseract_cmd_path": "",
-        "google_credentials_path": "",
-        "api_keys": {
-            "openai": None,
-            "gemini": None,
-            "google": None,
-        },
-    }
+    @classmethod
+    def get_defaults(cls) -> Dict[str, Any]:
+        """Get default settings with computed default training file paths."""
+        default_classifier, default_encoder = _get_default_training_files()
+        return {
+            "ocr_model": 2,  # Default to GPT-4 Vision
+            "debug_mode": False,
+            "enable_preprocessing": False,
+            "save_processed_image": False,
+            "enable_price_count": False,
+            "classifier_model_path": default_classifier,
+            "label_encoder_path": default_encoder,
+            "tesseract_cmd_path": "",
+            "google_credentials_path": "",
+            "api_keys": {
+                "openai": None,
+                "gemini": None,
+                "google": None,
+            },
+        }
 
     def __init__(self, settings_dir: Optional[Path] = None) -> None:
         self.settings_dir = settings_dir or _default_settings_dir()
@@ -72,7 +91,8 @@ class SettingsManager:
     # --------------------------------------------------------------------- #
     def _load_settings(self) -> None:
         """Load settings from disk, merging with defaults."""
-        data: Dict[str, Any] = json.loads(json.dumps(self.DEFAULTS))
+        defaults = self.get_defaults()
+        data: Dict[str, Any] = json.loads(json.dumps(defaults))
         file_data: Dict[str, Any] = {}
 
         if self.settings_path.exists():
@@ -82,7 +102,7 @@ class SettingsManager:
             except (json.JSONDecodeError, OSError):
                 file_data = {}
 
-        for key, default_value in self.DEFAULTS.items():
+        for key, default_value in defaults.items():
             if key == "api_keys":
                 data["api_keys"].update(file_data.get("api_keys", {}))
             else:
@@ -132,7 +152,8 @@ class SettingsManager:
     # --------------------------------------------------------------------- #
     def get_value(self, key: str, default: Any = None) -> Any:
         """Retrieve a scalar setting."""
-        return self._settings.get(key, default if default is not None else self.DEFAULTS.get(key))
+        defaults = self.get_defaults()
+        return self._settings.get(key, default if default is not None else defaults.get(key))
 
     def set_value(self, key: str, value: Any) -> None:
         """Set a scalar setting and save."""

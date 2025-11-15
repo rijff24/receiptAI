@@ -8,12 +8,6 @@ import re
 from datetime import date, datetime
 from io import BytesIO
 
-try:
-    import tkinter as tk
-    from tkinter import filedialog
-except ImportError:  # pragma: no cover
-    tk = None
-    filedialog = None
 
 import cv2
 import numpy as np
@@ -716,74 +710,73 @@ def main():
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
-            if tk and filedialog:
-                if st.button("Export"):
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    default_ext = ".json" if export_format == "JSON" else ".csv"
-                    filetypes = (
-                        [("JSON files", "*.json")]
-                        if export_format == "JSON"
-                        else [("CSV files", "*.csv")]
-                    )
-                    selected = filedialog.asksaveasfilename(
-                        defaultextension=default_ext,
-                        filetypes=filetypes,
-                        initialfile=f"receipt_data{default_ext}",
-                    )
-                    root.destroy()
-                    if selected:
-                        expected_ext = ".json" if export_format == "JSON" else ".csv"
-                        root_path, ext = os.path.splitext(selected)
-                        file_path = (
-                            selected
-                            if ext.lower() == expected_ext
-                            else f"{root_path}{expected_ext}"
+            # Prepare export data
+            if export_format == "JSON":
+                import json
+                serializable_results = [
+                    {
+                        "receipt_data": {
+                            **result["receipt_data"],
+                            "transaction_date": format_date_for_storage(
+                                result["receipt_data"].get("transaction_date")
+                            ),
+                            "notes": result["receipt_data"].get("notes", ""),
+                        },
+                        "file_name": result["file_name"],
+                    }
+                    for result in st.session_state.results
+                ]
+                export_data = json.dumps(serializable_results, indent=4, ensure_ascii=False)
+                mime_type = "application/json"
+                file_extension = "json"
+            else:  # CSV
+                rows = []
+                for result in st.session_state.results:
+                    receipt_data = result["receipt_data"]
+                    if not receipt_data["items"]:
+                        rows.append(
+                            {
+                                "item": "",
+                                "code": "",
+                                "code_desc": "",
+                                "price": "",
+                                "prob": "",
+                                "file_name": result["file_name"],
+                                "shop_name": receipt_data.get("shop_name", ""),
+                                "total_amount": receipt_data.get("total_amount", ""),
+                                "payment_mode": receipt_data.get("payment_mode", ""),
+                                "transaction_date": receipt_data.get("transaction_date", ""),
+                            }
                         )
-                        try:
-                            if export_format == "JSON":
-                                save_to_json(st.session_state.results, file_path)
-                            else:
-                                save_to_csv(st.session_state.results, file_path)
-                        except OSError as exc:
-                            st.error(f"Failed to export data: {exc}")
-                        else:
-                            st.success(f"Data exported to {file_path}")
-                            st.session_state.export_path = file_path
                     else:
-                        st.info("Export cancelled.")
-            else:
-                st.info(
-                    "Tkinter not available in this environment; please enter a full export path."
-                )
-                export_path = st.text_input(
-                    "Export path",
-                    value=st.session_state.get("export_path", ""),
-                    key="export_path_input",
-                    help="Provide a full path including file name.",
-                )
-                if st.button("Export"):
-                    if not export_path:
-                        st.error("Please enter a valid file path.")
-                    else:
-                        expected_ext = ".json" if export_format == "JSON" else ".csv"
-                        root_path, ext = os.path.splitext(export_path)
-                        file_path = (
-                            export_path
-                            if ext.lower() == expected_ext
-                            else f"{root_path}{expected_ext}"
-                        )
-                        try:
-                            if export_format == "JSON":
-                                save_to_json(st.session_state.results, file_path)
-                            else:
-                                save_to_csv(st.session_state.results, file_path)
-                        except OSError as exc:
-                            st.error(f"Failed to export data: {exc}")
-                        else:
-                            st.success(f"Data exported to {file_path}")
-                            st.session_state.export_path = file_path
+                        for item in receipt_data["items"]:
+                            rows.append(
+                                {
+                                    "item": item.get("item_name", ""),
+                                    "code": item.get("coicop", ""),
+                                    "code_desc": item.get("coicop_desc", ""),
+                                    "price": item.get("price", ""),
+                                    "prob": item.get("confidence", ""),
+                                    "file_name": result["file_name"],
+                                    "shop_name": receipt_data.get("shop_name", ""),
+                                    "total_amount": receipt_data.get("total_amount", ""),
+                                    "payment_mode": receipt_data.get("payment_mode", ""),
+                                    "transaction_date": receipt_data.get("transaction_date", ""),
+                                }
+                            )
+                df = pd.DataFrame(rows)
+                export_data = df.to_csv(index=False)
+                mime_type = "text/csv"
+                file_extension = "csv"
+
+            # Download button
+            st.download_button(
+                label=f"Download {export_format}",
+                data=export_data,
+                file_name=f"receipt_data.{file_extension}",
+                mime=mime_type,
+                use_container_width=True,
+            )
         if st.session_state.processing_active and st.session_state.processing_queue:
             queue_entry = st.session_state.processing_queue[0]
             counts = st.session_state.process_counts
