@@ -422,7 +422,24 @@ def process_image(image_path, ocr_processor):
     receipt_data.setdefault("vat_amount", 0)
     receipt_data.setdefault("transaction_date", None)
     receipt_data.setdefault("notes", "")
-    receipt_data["items"] = []
+    
+    # Preserve items from OCR if they exist, otherwise initialize empty list
+    if "items" not in receipt_data or not receipt_data["items"]:
+        receipt_data["items"] = []
+    elif isinstance(receipt_data["items"], list):
+        # Normalize item structure to ensure consistent field names
+        normalized_items = []
+        for item in receipt_data["items"]:
+            if isinstance(item, dict):
+                normalized_item = {
+                    "item_name": item.get("item_name") or item.get("name", ""),
+                    "price": item.get("price"),
+                    "coicop": item.get("coicop") or item.get("code"),
+                    "coicop_desc": item.get("coicop_desc") or item.get("code_desc"),
+                    "confidence": item.get("confidence") or item.get("prob"),
+                }
+                normalized_items.append(normalized_item)
+        receipt_data["items"] = normalized_items
 
     return {"image": original_image, "receipt_data": receipt_data}
 
