@@ -1,54 +1,109 @@
 """Class to hold config parameters."""
 
+from __future__ import annotations
+
 import os
-from io import StringIO
+from typing import Any, Dict
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
+
+try:
+    from scannerai.settings import SettingsManager
+except ImportError:  # pragma: no cover - optional dependency during install
+    SettingsManager = None  # type: ignore
+
+SETTINGS_KEY_MAP = {
+    "debug_mode": "DEBUG_MODE",
+    "enable_preprocessing": "ENABLE_PREPROCESSING",
+    "save_processed_image": "SAVE_PROCESSED_IMAGE",
+    "enable_price_count": "ENABLE_PRICE_COUNT",
+    "ocr_model": "OCR_MODEL",
+    "classifier_model_path": "CLASSIFIER_MODEL_PATH",
+    "label_encoder_path": "LABEL_ENCODER_PATH",
+    "tesseract_cmd_path": "TESSERACT_CMD_PATH",
+    "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
+}
 
 
-def load_config(config_file):
-    """Load configuration from a text file."""
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_int(value: Any, default: int) -> int:
     try:
-        with open(config_file, "r") as f:
-            config_content = f.read()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Configuration file not found: {config_file}")
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
-    # Use StringIO to create a file-like object from the config content
-    config_stream = StringIO(config_content)
-    load_dotenv(stream=config_stream)
+
+def _get_value(key: str, file_values: Dict[str, Any], default: Any = None) -> Any:
+    """Return a value prioritising environment variables over file values."""
+    if key in os.environ:
+        return os.environ.get(key)
+    return file_values.get(key, default)
+
+
+def _load_settings_manager_overrides() -> Dict[str, Any]:
+    """Load overrides from the in-app settings manager, if available."""
+    if not SettingsManager:
+        return {}
+    try:
+        manager = SettingsManager()
+    except Exception:
+        return {}
+
+    overrides = manager.export_settings()
+    overrides["OPENAI_API_KEY"] = manager.get_api_key("openai")
+    overrides["GEMINI_API_KEY"] = manager.get_api_key("gemini")
+    overrides["GOOGLE_API_KEY"] = manager.get_api_key("google")
+    return overrides
+
+
+def load_config(config_file: str):
+    """Load configuration from the legacy text file and settings manager."""
+    file_values = dotenv_values(config_file) if os.path.exists(config_file) else {}
 
     config = {
-        # Debug and Processing Settings
-        "DEBUG_MODE": os.getenv("DEBUG_MODE", "False").lower() == "true",
-        "ENABLE_PREPROCESSING": os.getenv(
-            "ENABLE_PREPROCESSING", "False"
-        ).lower()
-        == "true",
-        "SAVE_PROCESSED_IMAGE": os.getenv(
-            "SAVE_PROCESSED_IMAGE", "False"
-        ).lower()
-        == "true",
-        "ENABLE_PRICE_COUNT": os.getenv("ENABLE_PRICE_COUNT", "False").lower()
-        == "true",
-        # OCR Model Settings
-        "OCR_MODEL": int(os.getenv("OCR_MODEL", "3")),  # Default to Gemini
-        # Classification Model Paths
-        "CLASSIFIER_MODEL_PATH": os.getenv("CLASSIFIER_MODEL_PATH"),
-        "LABEL_ENCODER_PATH": os.getenv("LABEL_ENCODER_PATH"),
-        # API Keys
-        "GEMINI_API_KEY_PATH": os.getenv("GEMINI_API_KEY_PATH"),
-        "OPENAI_API_KEY_PATH": os.getenv("OPENAI_API_KEY_PATH"),
-        # Google Cloud credentials
-        "GOOGLE_CREDENTIALS_PATH": os.getenv("GOOGLE_CREDENTIALS_PATH"),
+        "DEBUG_MODE": _coerce_bool(_get_value("DEBUG_MODE", file_values, False)),
+        "ENABLE_PREPROCESSING": _coerce_bool(
+            _get_value("ENABLE_PREPROCESSING", file_values, False)
+        ),
+        "SAVE_PROCESSED_IMAGE": _coerce_bool(
+            _get_value("SAVE_PROCESSED_IMAGE", file_values, False)
+        ),
+        "ENABLE_PRICE_COUNT": _coerce_bool(
+            _get_value("ENABLE_PRICE_COUNT", file_values, False)
+        ),
+        "OCR_MODEL": _coerce_int(_get_value("OCR_MODEL", file_values, 2), 2),  # Default to GPT-4 Vision
+        "CLASSIFIER_MODEL_PATH": _get_value("CLASSIFIER_MODEL_PATH", file_values),
+        "LABEL_ENCODER_PATH": _get_value("LABEL_ENCODER_PATH", file_values),
+        "GEMINI_API_KEY_PATH": _get_value("GEMINI_API_KEY_PATH", file_values),
+        "OPENAI_API_KEY_PATH": _get_value("OPENAI_API_KEY_PATH", file_values),
+        "GOOGLE_CREDENTIALS_PATH": _get_value("GOOGLE_CREDENTIALS_PATH", file_values),
+        "TESSERACT_CMD_PATH": _get_value("TESSERACT_CMD_PATH", file_values),
+        "OPENAI_API_KEY": None,
+        "GEMINI_API_KEY": None,
+        "GOOGLE_API_KEY": None,
     }
 
-    # Validate required configurations
-    # required_configs = ['CLASSIFIER_MODEL_PATH', 'LABEL_ENCODER_PATH']
-    # missing_configs = [key for key in required_configs if not config[key]]
+    overrides = _load_settings_manager_overrides()
+    for settings_key, config_key in SETTINGS_KEY_MAP.items():
+        if settings_key in overrides and overrides[settings_key] is not None:
+            value = overrides[settings_key]
+            if config_key == "OCR_MODEL":
+                config[config_key] = _coerce_int(value, config[config_key])
+            elif isinstance(config[config_key], bool):
+                config[config_key] = _coerce_bool(value, config[config_key])
+            else:
+                config[config_key] = value
 
-    # if missing_configs:
-    #     raise ValueError(f"Missing required configuration(s): {', '.join(missing_configs)}")
+    for direct_key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        if overrides.get(direct_key):
+            config[direct_key] = overrides[direct_key]
 
     return config
 
@@ -114,13 +169,39 @@ class Config:
         return self._config["OPENAI_API_KEY_PATH"]
 
     @property
+    def open_api_key_path(self):
+        """Backward compatible alias for OPENAI_API_KEY_PATH."""
+        return self._config["OPENAI_API_KEY_PATH"]
+
+    @property
+    def tesseract_cmd_path(self):
+        """Get TESSERACT_CMD_PATH."""
+        return self._config["TESSERACT_CMD_PATH"]
+
+    @property
     def google_credentials_path(self):
         """Get GOOGLE_CREDENTIALS_PATH."""
         return self._config["GOOGLE_CREDENTIALS_PATH"]
 
+    @property
+    def openai_api_key(self):
+        """Get decrypted OpenAI API key when stored via settings."""
+        return self._config.get("OPENAI_API_KEY")
+
+    @property
+    def gemini_api_key(self):
+        """Get decrypted Gemini API key when stored via settings."""
+        return self._config.get("GEMINI_API_KEY")
+
+    @property
+    def google_api_key(self):
+        """Get decrypted Google API key when stored via settings."""
+        return self._config.get("GOOGLE_API_KEY")
+
 
 # Create a global instance
-config = Config("config.txt")
+CONFIG_FILE_PATH = os.path.join(os.path.dirname(__file__), "config.txt")
+config = Config(CONFIG_FILE_PATH)
 
 # Usage example:
 # from scannerai.config.config import config

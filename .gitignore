@@ -1,0 +1,60 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+dist/
+develop-eggs/
+eggs/
+*.egg-info/
+*.egg
+wheelhouse/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+scanner-venv/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Streamlit cache
+.streamlit/
+
+# Local data and autosaves
+receipt_autosave.json
+receipt_data.csv
+
+# User-specific configuration or credentials
+*.key
+*.pem
+*.p12
+*.cer
+*.crt
+*.env.local
+scannerai_user_settings.json
+.scannerai/
+
+# System files
+Thumbs.db
+.DS_Store
+
+

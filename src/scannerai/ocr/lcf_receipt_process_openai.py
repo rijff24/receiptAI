@@ -1,8 +1,10 @@
 """use Tesseract + GPT-3 to extract structured information from an image."""
 
 import ast
+import json
 import os
 import re
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -20,22 +22,37 @@ from scannerai.utils.scanner_utils import (
 class LCFReceiptProcessOpenai:
     """class to extract text from image using OpenAI API."""
 
-    def __init__(self, openai_api_key_path):
+    def __init__(
+        self,
+        openai_api_key_path=None,
+        tesseract_cmd_path=None,
+        openai_api_key=None,
+    ):
         """Initialize Openai API with credentials."""
 
         self.InitSuccess = False  # Initialize to False
         self.client = None  # Initialize to None
+        if tesseract_cmd_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd_path
 
-        if not openai_api_key_path or not os.path.exists(openai_api_key_path):
-            print(
-                f"WARNING: ChatGPT API key not found or file does not exist: {openai_api_key_path}"
-            )
+        api_key = openai_api_key or self._load_key_from_path(openai_api_key_path)
+        if not api_key:
+            print("WARNING: ChatGPT API key not supplied. OpenAI OCR disabled.")
             return
 
-        openai_api_key = read_api_key(openai_api_key_path)
         # Initialize OpenAI client
-        self.client = OpenAI(api_key=openai_api_key)
+        self.client = OpenAI(api_key=api_key)
         self.InitSuccess = True
+
+    @staticmethod
+    def _load_key_from_path(key_path):
+        """Load an API key from a file path."""
+        if not key_path:
+            return None
+        if not os.path.exists(key_path):
+            print(f"WARNING: ChatGPT API key file does not exist: {key_path}")
+            return None
+        return read_api_key(key_path)
 
     def get_InitSuccess(self):
         """Return the initialization status."""
@@ -61,21 +78,19 @@ class LCFReceiptProcessOpenai:
     def extract_receipt_with_chatgpt(self, ocr_text, enable_price_count=False):
         """To call OpenAI API and format the receipt information."""
         prompt = (
-            "Here is the OCR text from a receipt:\n"
-            f"'''{ocr_text}'''\n"
-            "Please extract the following information and output it in the form of a json dictionary:\n"
-            "if any value is missing, please leave it empty\n"
-            "Do not allow item name empty\n"
-            "{\n"
-            "    'shop_name': 'example shop',\n"
-            "    'items': [\n"
-            "        {'name': 'item1', 'price': 1.99},\n"
-            "        {'name': 'item2', 'price': 2.49},\n"
-            "        ...\n"
-            "    ],\n"
-            "    'total_amount': 27.83,\n"
-            "    'payment_mode': 'card'\n"
-            "}"
+            f"You are given OCR text from a retail receipt.\n"
+            f'OCR TEXT:\n"""{ocr_text}"""\n'
+            "Return a **valid JSON object** using double quotes, e.g. "
+            '{"shop_name": "...", "items": [{"name": "...", "price": 0.00}], '
+            '"total_amount": 0.00, "vat_amount": 0.00, "payment_mode": "...", '
+            '"transaction_date": "YYYY-MM-DD"}.\n'
+            "- Use numbers without thousands separators (e.g. 1219.53, not 1,219.53).\n"
+            "- Ensure every item has a non-empty name; use an empty string if uncertain.\n"
+            "- Use null for missing numeric values; if VAT is not shown use 0.0.\n"
+            "- Classify payment_mode as 'CARD' whenever there is a card/POS slip (authorization codes, merchant copy, speed point, card machine references, etc.), even if other text mentions cash.\n"
+            "- Only use 'CASH' when cash markers such as 'amount tendered' and 'change' appear; otherwise default uncertain cases to 'EFT'.\n"
+            "- Only include the fields: shop_name, items (list of objects with name and price), total_amount, vat_amount, payment_mode, transaction_date.\n"
+            "- Do not include any explanatory text—respond with JSON only."
         )
 
         # try:
@@ -102,6 +117,117 @@ class LCFReceiptProcessOpenai:
             print(f"Estimated total tokens: {total_tokens}")
 
         return receipt_info
+
+    @staticmethod
+    def _normalise_amount(value):
+        """Convert string amount with optional commas into float."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        cleaned = value.strip().replace(",", "")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    def extract_vat_from_text(self, text):
+        """Attempt to extract VAT amount directly from OCR text."""
+        if not text:
+            return None
+
+        vat_patterns = [
+            r"vat(?:\s*(?:amount|total|incl\.?|excl\.?)?)?\s*[:=]\s*([\d.,]+)",
+            r"vat\s*([\d.,]+)",
+            r"tax\s*[:=]\s*([\d.,]+)",
+        ]
+
+        for pattern in vat_patterns:
+            matches = re.findall(pattern, text, flags=re.IGNORECASE)
+            for match in matches:
+                amount = self._normalise_amount(match)
+                if amount is not None:
+                    return round(amount, 2)
+
+        return None
+
+    @staticmethod
+    def _normalise_payment_mode(value, raw_text=""):
+        """Map payment descriptors into CARD/CASH/EFT categories."""
+        candidates = []
+        if value:
+            candidates.append(str(value))
+        if raw_text:
+            candidates.append(str(raw_text))
+        combined = " ".join(candidates).lower()
+
+        if re.search(
+            r"\b(card|credit|debit|visa|mastercard|amex|pos|speed\s*point|chip|tap|slip|authori[sz]ation|merchant copy|card machine)\b",
+            combined,
+        ):
+            return "CARD"
+        if re.search(
+            r"\b(cash|change|tendered|notes|coins|amount\s+tendered|cash\s+tendered)\b",
+            combined,
+        ):
+            return "CASH"
+        if re.search(
+            r"\b(branch|bank|transfer|eft|direct\s*deposit|cheque)\b",
+            combined,
+        ):
+            return "EFT"
+        return "EFT"
+
+    @staticmethod
+    def _normalise_date_string(value):
+        """Convert various date formats to ISO string."""
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        value_str = str(value).strip()
+        if not value_str:
+            return None
+
+        normalized = value_str.replace("\\", "/").replace(".", "/")
+
+        date_formats = [
+            "%Y-%m-%d",
+            "%d-%m-%Y",
+            "%d/%m/%Y",
+            "%Y/%m/%d",
+            "%d %b %Y",
+            "%d %B %Y",
+            "%m/%d/%Y",
+            "%m-%d-%Y",
+        ]
+
+        for fmt in date_formats:
+            try:
+                return datetime.strptime(normalized, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
+
+    def extract_date_from_text(self, text):
+        """Attempt to extract a transaction date from OCR text."""
+        if not text:
+            return None
+
+        date_patterns = [
+            r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b",
+            r"\b\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\b",
+            r"\b[A-Za-z]{3,}\s+\d{1,2},\s+\d{4}\b",
+        ]
+
+        for pattern in date_patterns:
+            matches = re.findall(pattern, text, flags=re.IGNORECASE)
+            for match in matches:
+                normalized = self._normalise_date_string(match)
+                if normalized:
+                    return normalized
+        return None
 
     def parse_receipt_info(self, receipt_info):
         """Parse the input text to structured data."""
@@ -248,10 +374,44 @@ class LCFReceiptProcessOpenai:
         print(receipt_info)
         # Parse the receipt_info
         # receipt_data = parse_receipt_info(receipt_info)
-        receipt_data = (
-            ast.literal_eval(receipt_info)
-            if isinstance(receipt_info, str)
-            else receipt_info
+        if isinstance(receipt_info, str):
+            cleaned_info = receipt_info.strip()
+            # Remove thousands separators between digits to keep JSON valid
+            cleaned_info = re.sub(r"(?<=\d),(?=\d{3}(\D|$))", "", cleaned_info)
+            try:
+                receipt_data = json.loads(cleaned_info)
+            except json.JSONDecodeError:
+                # Best-effort fallback: replace single quotes and try again
+                normalized = re.sub(r"(?<=\d),(?=\d{3}(\D|$))", "", cleaned_info.replace("'", '"'))
+                try:
+                    receipt_data = json.loads(normalized)
+                except json.JSONDecodeError:
+                    # As a final fallback, attempt literal_eval
+                    receipt_data = ast.literal_eval(normalized)
+        else:
+            receipt_data = receipt_info
+        receipt_data.setdefault("vat_amount", 0)
+        receipt_data.setdefault("transaction_date", None)
+        receipt_data.setdefault("notes", "")
+
+        if self._normalise_amount(receipt_data.get("vat_amount")) in (None, 0):
+            vat_guess = self.extract_vat_from_text(ocr_text)
+            if vat_guess is not None:
+                receipt_data["vat_amount"] = vat_guess
+
+        if not self._normalise_date_string(receipt_data.get("transaction_date")):
+            date_guess = self.extract_date_from_text(ocr_text)
+            if date_guess is not None:
+                receipt_data["transaction_date"] = date_guess
+        else:
+            receipt_data["transaction_date"] = self._normalise_date_string(
+                receipt_data["transaction_date"]
+            )
+
+        raw_context = receipt_info if isinstance(receipt_info, str) else json.dumps(receipt_info)
+        receipt_data["payment_mode"] = self._normalise_payment_mode(
+            receipt_data.get("payment_mode"),
+            f"{raw_context}\n{ocr_text}",
         )
 
         receipt_data["receipt_pathfile"] = image_path

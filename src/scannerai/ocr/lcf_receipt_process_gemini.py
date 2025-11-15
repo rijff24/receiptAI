@@ -15,7 +15,12 @@ from scannerai.utils.scanner_utils import merge_pdf_pages, read_api_key
 class LCFReceiptProcessGemini:
     """OCR processor using Gemini."""
 
-    def __init__(self, google_credentials_path=None, gemini_api_key_path=None):
+    def __init__(
+        self,
+        google_credentials_path=None,
+        gemini_api_key_path=None,
+        gemini_api_key=None,
+    ):
         """Initialize Gemini API with credentials."""
 
         self.model = None
@@ -24,20 +29,17 @@ class LCFReceiptProcessGemini:
         if not google_credentials_path or not os.path.exists(
             google_credentials_path
         ):
-            print(f"WARNING: Google credentials not found or file does not exist!")
+            print("WARNING: Google credentials not found or file does not exist!")
             return
 
-        if not gemini_api_key_path or not os.path.exists(gemini_api_key_path):
-            print(f"WARNING: Gemini API key not found or file does not exist!")
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = google_credentials_path
+
+        api_key = gemini_api_key or self._load_key_from_path(gemini_api_key_path)
+        if not api_key:
+            print("WARNING: Gemini API key not supplied. Gemini OCR disabled.")
             return
 
-        if google_credentials_path:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = (
-                google_credentials_path
-            )
-
-        gemini_api_key = read_api_key(gemini_api_key_path)
-        genai.configure(api_key=gemini_api_key)
+        genai.configure(api_key=api_key)
 
         self.model = genai.GenerativeModel(
             "gemini-1.5-flash"
@@ -114,3 +116,13 @@ class LCFReceiptProcessGemini:
         receipt_data["receipt_pathfile"] = file_path
 
         return receipt_data
+
+    @staticmethod
+    def _load_key_from_path(key_path):
+        """Load an API key from disk."""
+        if not key_path:
+            return None
+        if not os.path.exists(key_path):
+            print(f"WARNING: Gemini API key file does not exist: {key_path}")
+            return None
+        return read_api_key(key_path)

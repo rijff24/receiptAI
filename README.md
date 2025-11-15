@@ -10,6 +10,7 @@ ScannerAI is a Python application that processes retail receipts using computer 
 - **Interactive GUI**: View, edit, and manage receipt data
 - **Multiple OCR Options**: Support for multiple OCR models including Gemini and OpenAI
 - **Batch Processing**: Process multiple receipts from a folder
+- **In-App Settings**: Configure OCR providers, API keys, and local paths directly from the UI
 - **Export Options**: Save processed data in JSON or CSV formats
 - **Progress Tracking**: Visual progress tracking for batch operations
 
@@ -52,47 +53,47 @@ pip install -r requirements.txt
 ```
 
 
-**4. Set up configuration**
+**4. Configure ScannerAI**
 
-Create a configuration file (e.g., `config.txt`) at the folder 'scannerai/_config/' with the following parameters:
-   ``` bash
-   DEBUG_MODE=False
-   ENABLE_PREPROCESSING=False
-   SAVE_PROCESSED_IMAGE=False
-   ENABLE_PRICE_COUNT=False
-   OCR_MODEL=3
-   CLASSIFIER_MODEL_PATH=/path/to/your/trained/model
-   LABEL_ENCODER_PATH=/path/to/your/label/encoder
-   GEMINI_API_KEY_PATH=/path/to/your/gemini/api/key
-   OPENAI_API_KEY_PATH=/path/to/your/openai/api/key
-   GOOGLE_CREDENTIALS_PATH=/path/to/your/google/credentials
-   ```
+> [!TIP]
+> The recommended way to configure ScannerAI is *inside the app*. Launch Streamlit, open the sidebar, and expand **Application Settings**. You can pick the OCR provider, toggle preprocessing, and paste API keys without touching any files. Everything is stored locally and encrypted—see [`SETTINGS.md`](SETTINGS.md) for details.
 
-**Rember to update the path config = Config("/path/to/your/config.txt") in 'scannerai/_config/config.py'.**
+- Settings are stored under `%APPDATA%\ScannerAI\user_settings.json` on Windows or `~/.config/ScannerAI/user_settings.json` on macOS/Linux.
+- Uploaded Google service-account JSON files are saved alongside the settings and never leave your device.
 
-There is an example of 'scannerai_config.txt' for your reference.
+**Headless / legacy configuration**
 
-Here is the descriptioin of the configuration parameters:
+When running ScannerAI without the UI (CI pipelines, remote servers), you can still supply a `.env`-style file at `src/scannerai/_config/config.txt`:
 
-- `DEBUG_MODE`: Enable/disable debug logging
-- `ENABLE_PREPROCESSING`: Enable/disable image preprocessing (not implemented at this moment, please set as False)
-- `SAVE_PROCESSED_IMAGE`: Save processed images
-- `ENABLE_PRICE_COUNT`: Enable token counting for API pricing
-- `OCR_MODEL`: Select OCR model
-- `CLASSIFIER_MODEL_PATH`: Path to trained classification model (if no trained model is available, please remove this parameter. The COICOP and confidence columns will display None)
-- `LABEL_ENCODER_PATH`: Path to label encoder (This should be generated together with the trained model. If not available, please remove this parameter.)
-- `GEMINI_API_KEY_PATH`: Path to Gemini API key file (only required if OCR_MODEL is set as 3)
-- `OPENAI_API_KEY_PATH`: Path to OpenAI API key file (only required if OCR_MODEL is set as 1 or 2)
-- `GOOGLE_CREDENTIALS_PATH`: Path to Google Cloud credentials (only required if OCR_MODEL is set as 3)
+```bash
+DEBUG_MODE=False
+ENABLE_PREPROCESSING=False
+SAVE_PROCESSED_IMAGE=False
+ENABLE_PRICE_COUNT=False
+OCR_MODEL=3
+CLASSIFIER_MODEL_PATH=/absolute/path/to/your/trained/model
+LABEL_ENCODER_PATH=/absolute/path/to/your/label/encoder
+GEMINI_API_KEY_PATH=/absolute/path/to/gemini.key
+OPENAI_API_KEY_PATH=/absolute/path/to/openai.key
+GOOGLE_CREDENTIALS_PATH=/absolute/path/to/google-credentials.json
+TESSERACT_CMD_PATH=/absolute/path/to/tesseract.exe
+```
+
+These keys mirror the UI toggles:
+
+- `DEBUG_MODE`, `ENABLE_PREPROCESSING`, `SAVE_PROCESSED_IMAGE`, `ENABLE_PRICE_COUNT`: boolean switches for diagnostics and pricing estimates
+- `OCR_MODEL`: `1` = Tesseract + GPT‑3.5, `2` = GPT‑4 Vision, `3` = Gemini Vision
+- `CLASSIFIER_MODEL_PATH` / `LABEL_ENCODER_PATH`: optional paths to trained COICOP models
+- `GEMINI_API_KEY_PATH`, `OPENAI_API_KEY_PATH`, `GOOGLE_CREDENTIALS_PATH`, `TESSERACT_CMD_PATH`: filesystem fallbacks when you cannot use in-app secrets storage
 
 ## API Keys
 
 The application requires API keys for OCR services:
-- Gemini API key (optional if Google's Gemini is selected as OCR_MODEL)
-- OpenAI API key (optional if OpenAI API is selected as OCR_MODEL)
-- Google Cloud credentials (optional if Google's Gemini is selected as OCR_MODEL)
+- Gemini API key (only if you select the Gemini OCR model)
+- OpenAI API key (only if you select the GPT-based OCR models)
+- Google Cloud service-account credentials (only for Gemini)
 
-Store API keys in separate files and update paths in the configuration.
+Use the **Application Settings** panel to paste keys directly—ScannerAI encrypts them with `cryptography.Fernet` and stores them locally. For headless deployments, provide file paths in `config.txt` as shown above. Never commit your keys to Git.
 
 ## Trained Model
 We put a trained model as an example in receipt_scanner/src/scannerai/classifiers/trainedModels/, where you can set LRCountVectorizer.sav for CLASSIFIER_MODEL_PATH and encoder.pkl for LABEL_ENCODER_PATH.
@@ -147,7 +148,14 @@ See `requirements.txt` for detailed dependencies.
 
 ## Configuration
 
+ScannerAI now ships with an in-app settings manager. Launch the Streamlit UI, expand **Application Settings** in the sidebar, and adjust:
 
+- OCR provider (Tesseract + GPT‑3.5, GPT‑4 Vision, Gemini Vision)
+- Debug/preprocessing toggles and pricing estimators
+- Local paths for classifier artifacts, Tesseract, and Google credentials
+- OpenAI / Gemini API keys (stored encrypted on your machine)
+
+See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-edit instructions if you need to manage the JSON file programmatically.
 
 ### Pre-commit actions
 
@@ -171,14 +179,23 @@ This repository contains a configuration of pre-commit hooks. These are language
 
 
 
+# Security
+
+- API keys pasted in the UI are encrypted with `cryptography.Fernet` and stored only on your machine. They are never synced to GitHub or any remote service.
+- Uploaded Google credentials stay inside the local ScannerAI settings directory and inherit restrictive file permissions.
+- `.gitignore` excludes autosaves, local configs, and credential files by default—please keep it that way when contributing.
+- See `SECURITY.md` for the coordinated disclosure process.
+
 # Data Science Campus
 
 At the [Data Science Campus](https://datasciencecampus.ons.gov.uk/about-us/) we apply data science, and build skills, for public good across the UK and internationally. Get in touch with the Campus at [datasciencecampus\@ons.gov.uk](datasciencecampus@ons.gov.uk).
 
 # License
 
-<!-- Unless stated otherwise, the codebase is released under [the MIT Licence][mit]. -->
+This community-maintained fork continues to use the original Open Government Licence v3.0:
 
-The code, unless otherwise stated, is released under [the MIT Licence](LICENCE).
+- Code: © Crown copyright and licensed under the [Open Government Licence v3.0](LICENSE). When redistributing, include the attribution statement:  
+  `Contains public sector information licensed under the Open Government Licence v3.0.`
+- Documentation: also covered by the [Open Government Licence v3.0](http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
 
-The documentation for this work is subject to [© Crown copyright](http://www.nationalarchives.gov.uk/information-management/re-using-public-sector-information/uk-government-licensing-framework/crown-copyright/) and is available under the terms of the [Open Government 3.0](http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/) licence.
+All contributions to this repository are accepted under the same licence terms to ensure downstream users retain the same freedoms.

@@ -1,15 +1,30 @@
 """use streamlit to create interface of receipt data entry."""
 
+import base64
+import inspect
 import json
 import os
+import re
+from datetime import date, datetime
+from io import BytesIO
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+except ImportError:  # pragma: no cover
+    tk = None
+    filedialog = None
 
 import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+from streamlit.runtime.scriptrunner import RerunException, RerunData
 
+from PIL import Image
 from scannerai._config.config import config
-from scannerai.classifiers.lcf_classify import lcf_classifier
+from scannerai.settings import SettingsManager
 from scannerai.utils.scanner_utils import merge_pdf_pages
 
 # Configure Streamlit page
@@ -18,24 +33,398 @@ st.set_page_config(
     page_title="Living Costs and Food Survey - Receipt Data Entry",
 )
 
-def classify_items(receipt_data, classifier, description_dict):
-    """Classify items in receipt data using the LCF classifier."""
-    if receipt_data is None or classifier is None:
-        return receipt_data
-    
-    for item in receipt_data["items"]:
-        itemDesc = item["name"]
-        result, prob = classifier.predict(itemDesc)
-        item["code"] = result
-        item["prob"] = prob
-        
-        item["code_desc"] = description_dict.get(str(item["code"]), "")
-        
-    return receipt_data
+OCR_MODEL_OPTIONS = {
+    1: "Tesseract + GPT-3.5",
+    2: "GPT-4 Vision",
+    3: "Gemini Vision",
+}
+
+def parse_float(value):
+    """Utility to convert mixed-format numeric strings to float."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    cleaned = str(value).replace(",", "")
+    match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    return None
 
 
-def process_image(image_path, ocr_processor, classifier_processor, description_dictionary):
+def format_currency_string(value):
+    """Format numeric-like value to a string with two decimals, else return string."""
+    parsed = parse_float(value)
+    if parsed is None:
+        return "" if value in (None, "") else str(value)
+    return f"{parsed:.2f}"
+
+
+def parse_date_string(value):
+    """Convert incoming string/date to a date object if possible."""
+    if value in (None, "", "null"):
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    value_str = str(value).strip()
+    if not value_str:
+        return None
+
+    # Replace common separators
+    normalized = value_str.replace("\\", "/")
+
+    date_formats = [
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%Y/%m/%d",
+        "%d %b %Y",
+        "%d %B %Y",
+        "%d.%m.%Y",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+    ]
+
+    for fmt in date_formats:
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def format_date_for_storage(value):
+    """Return ISO formatted date string or None."""
+    parsed = parse_date_string(value)
+    if parsed:
+        return parsed.isoformat()
+    return None
+
+
+def image_array_to_base64(image_array):
+    """Convert numpy image array to base64 data URL."""
+    pil_img = Image.fromarray(image_array)
+    buffer = BytesIO()
+    pil_img.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+
+def force_rerun():
+    """Compatibility rerun helper for older Streamlit releases."""
+    raise RerunException(RerunData())
+
+
+def get_settings_manager():
+    """Return (and cache) the settings manager for the current session."""
+    if "settings_manager" not in st.session_state:
+        try:
+            st.session_state.settings_manager = SettingsManager()
+        except Exception as exc:  # pragma: no cover - surface to UI
+            st.sidebar.error(f"Failed to initialise settings: {exc}")
+            raise
+    return st.session_state.settings_manager
+
+
+def render_settings_panel():
+    """Render the in-app settings editor."""
+    try:
+        settings_manager = get_settings_manager()
+    except Exception:
+        return
+    snapshot = settings_manager.get_settings_snapshot()
+    api_status = snapshot.get("api_keys", {})
+    model_keys = list(OCR_MODEL_OPTIONS.keys())
+    current_model = snapshot.get("ocr_model", 2)  # Default to GPT-4 Vision
+    default_index = (
+        model_keys.index(current_model) if current_model in model_keys else model_keys.index(2)
+    )
+    existing_google_credentials_path = snapshot.get("google_credentials_path", "")
+
+    with st.sidebar.expander("Application Settings", expanded=False):
+        st.caption(
+            f"Settings are stored locally at: `{settings_manager.settings_path}`"
+        )
+        
+        # Handle browse button clicks outside the form
+        # Check for selected paths from browse buttons and update snapshot
+        if "classifier_path_selected" in st.session_state:
+            snapshot["classifier_model_path"] = st.session_state["classifier_path_selected"]
+            settings_manager.update_values({"classifier_model_path": st.session_state["classifier_path_selected"]})
+            del st.session_state["classifier_path_selected"]
+            st.rerun()
+        if "encoder_path_selected" in st.session_state:
+            snapshot["label_encoder_path"] = st.session_state["encoder_path_selected"]
+            settings_manager.update_values({"label_encoder_path": st.session_state["encoder_path_selected"]})
+            del st.session_state["encoder_path_selected"]
+            st.rerun()
+        if "tesseract_path_selected" in st.session_state:
+            snapshot["tesseract_cmd_path"] = st.session_state["tesseract_path_selected"]
+            settings_manager.update_values({"tesseract_cmd_path": st.session_state["tesseract_path_selected"]})
+            del st.session_state["tesseract_path_selected"]
+            st.rerun()
+        if "google_creds_path_selected" in st.session_state:
+            snapshot["google_credentials_path"] = st.session_state["google_creds_path_selected"]
+            settings_manager.update_values({"google_credentials_path": st.session_state["google_creds_path_selected"]})
+            del st.session_state["google_creds_path_selected"]
+            st.rerun()
+        
+        # Refresh snapshot after potential updates
+        snapshot = settings_manager.get_settings_snapshot()
+        
+        # Settings inputs (no form wrapper)
+        ocr_model = st.selectbox(
+            "Preferred OCR model",
+            options=model_keys,
+            format_func=lambda value: OCR_MODEL_OPTIONS.get(value, f"Model {value}"),
+            index=default_index,
+            help="Switch between Tesseract+GPT-3.5, GPT-4 Vision, or Gemini OCR pipelines.",
+        )
+        debug_mode = st.toggle(
+            "Enable debug logging", value=snapshot.get("debug_mode", False)
+        )
+        enable_preprocessing = st.toggle(
+            "Enable preprocessing", value=snapshot.get("enable_preprocessing", False)
+        )
+        save_processed_image = st.toggle(
+            "Save processed image", value=snapshot.get("save_processed_image", False)
+        )
+        enable_price_count = st.toggle(
+            "Enable token price counting",
+            value=snapshot.get("enable_price_count", False),
+        )
+
+        st.divider()
+        
+        # Classifier model path with browse button
+        classifier_path_value = snapshot.get("classifier_model_path", "")
+        classifier_model_path = st.text_input(
+            "Classifier model path",
+            value=classifier_path_value,
+            help="Path to your trained classification model file (.sav). Used for COICOP code classification. If not provided, COICOP and confidence columns will display None.",
+        )
+        if st.button("Browse Classifier Model", key="browse_classifier"):
+            if tk and filedialog:
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                selected = filedialog.askopenfilename(
+                    title="Select Classifier Model",
+                    filetypes=[("Model Files", "*.sav"), ("All Files", "*.*")],
+                    initialdir=os.path.dirname(classifier_path_value) if classifier_path_value and os.path.exists(classifier_path_value) else None,
+                )
+                root.destroy()
+                if selected:
+                    st.session_state["classifier_path_selected"] = selected
+                    st.rerun()
+        
+        # Label encoder path with browse button
+        encoder_path_value = snapshot.get("label_encoder_path", "")
+        label_encoder_path = st.text_input(
+            "Label encoder path",
+            value=encoder_path_value,
+            help="Path to your label encoder file (.pkl). This should be generated together with the trained classifier model. If not available, COICOP classification will not work.",
+        )
+        if st.button("Browse Label Encoder", key="browse_encoder"):
+            if tk and filedialog:
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                selected = filedialog.askopenfilename(
+                    title="Select Label Encoder",
+                    filetypes=[("Pickle Files", "*.pkl"), ("All Files", "*.*")],
+                    initialdir=os.path.dirname(encoder_path_value) if encoder_path_value and os.path.exists(encoder_path_value) else None,
+                )
+                root.destroy()
+                if selected:
+                    st.session_state["encoder_path_selected"] = selected
+                    st.rerun()
+        
+        # Tesseract path - only show for model 1
+        if ocr_model == 1:
+            tesseract_path_value = snapshot.get("tesseract_cmd_path", "")
+            tesseract_cmd_path = st.text_input(
+                "Tesseract executable path",
+                value=tesseract_path_value,
+                help="Path to the Tesseract OCR executable (tesseract.exe on Windows, tesseract on Linux/Mac). Required for Tesseract + GPT-3.5 OCR model. Example: C:/Program Files/Tesseract-OCR/tesseract.exe",
+            )
+            if st.button("Browse Tesseract Executable", key="browse_tesseract"):
+                if tk and filedialog:
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    selected = filedialog.askopenfilename(
+                        title="Select Tesseract Executable",
+                        filetypes=[("Executable", "*.exe"), ("All Files", "*.*")] if os.name == "nt" else [("All Files", "*.*")],
+                        initialdir=os.path.dirname(tesseract_path_value) if tesseract_path_value and os.path.exists(tesseract_path_value) else None,
+                    )
+                    root.destroy()
+                    if selected:
+                        st.session_state["tesseract_path_selected"] = selected
+                        st.rerun()
+        else:
+            tesseract_cmd_path = snapshot.get("tesseract_cmd_path", "")
+        
+        # Google credentials - only show for model 3
+        if ocr_model == 3:
+            google_creds_value = snapshot.get("google_credentials_path", existing_google_credentials_path)
+            google_credentials_path = st.text_input(
+                "Google credentials JSON path",
+                value=google_creds_value,
+                help="Path to your Google service account JSON file. Required for Gemini OCR. This file contains credentials for accessing Google Cloud services.",
+            )
+            if st.button("Browse Google Credentials", key="browse_google_creds"):
+                if tk and filedialog:
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    selected = filedialog.askopenfilename(
+                        title="Select Google Credentials JSON",
+                        filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+                        initialdir=os.path.dirname(google_creds_value) if google_creds_value and os.path.exists(google_creds_value) else None,
+                    )
+                    root.destroy()
+                    if selected:
+                        st.session_state["google_creds_path_selected"] = selected
+                        st.rerun()
+            
+            google_credentials_upload = st.file_uploader(
+                "Upload Google service account JSON",
+                type=["json"],
+                key="google_credentials_uploader",
+                help="Uploaded files are stored only on your machine inside the ScannerAI settings folder.",
+            )
+        else:
+            google_credentials_path = existing_google_credentials_path
+            google_credentials_upload = None
+
+        st.divider()
+        
+        # OpenAI API key - only show for models 1 and 2
+        if ocr_model in (1, 2):
+            openai_has_key = api_status.get("openai", False)
+            openai_key_input = st.text_input(
+                "OpenAI API key",
+                type="password",
+                value="",
+                placeholder="Enter new key" if not openai_has_key else "Key stored. Enter to replace.",
+                help="Required for GPT-based OCR models. Keys are encrypted locally. Leave blank to keep the existing key.",
+            )
+            openai_clear = st.checkbox(
+                "Remove stored OpenAI key",
+                value=False,
+                help="Tick to delete the stored key if you want to remove access.",
+            )
+        else:
+            openai_key_input = ""
+            openai_clear = False
+
+        # Gemini API key - only show for model 3
+        if ocr_model == 3:
+            gemini_has_key = api_status.get("gemini", False)
+            gemini_key_input = st.text_input(
+                "Gemini API key",
+                type="password",
+                value="",
+                placeholder="Enter new key" if not gemini_has_key else "Key stored. Enter to replace.",
+                help="Required for Gemini OCR. Keys are encrypted locally. Leave blank to keep the existing key.",
+            )
+            gemini_clear = st.checkbox(
+                "Remove stored Gemini key",
+                value=False,
+                help="Tick to delete the stored Gemini key.",
+            )
+        else:
+            gemini_key_input = ""
+            gemini_clear = False
+
+        save_settings = st.button(
+            "Save Settings", use_container_width=True
+        )
+
+        if save_settings:
+            validation_errors = []
+            if ocr_model in (1, 2) and not (openai_key_input.strip() or api_status.get("openai")):
+                validation_errors.append(
+                    "An OpenAI API key is required for GPT-based OCR models."
+                )
+            if ocr_model == 3:
+                if not (gemini_key_input.strip() or api_status.get("gemini")):
+                    validation_errors.append("A Gemini API key is required for Gemini OCR.")
+                if not (
+                    google_credentials_upload
+                    or google_credentials_path.strip()
+                    or existing_google_credentials_path.strip()
+                ):
+                    validation_errors.append(
+                        "Google service-account credentials are required for Gemini OCR."
+                    )
+
+            if validation_errors:
+                for message in validation_errors:
+                    st.error(message)
+                st.info("Update the missing fields above and press Save Settings again.")
+                return
+
+            updates = {
+                "ocr_model": ocr_model,
+                "debug_mode": debug_mode,
+                "enable_preprocessing": enable_preprocessing,
+                "save_processed_image": save_processed_image,
+                "enable_price_count": enable_price_count,
+                "classifier_model_path": classifier_model_path.strip(),
+                "label_encoder_path": label_encoder_path.strip(),
+                "tesseract_cmd_path": tesseract_cmd_path.strip(),
+                "google_credentials_path": google_credentials_path.strip(),
+            }
+
+            if google_credentials_upload is not None:
+                credentials_path = settings_manager.settings_dir / "google_credentials.json"
+                credentials_path.write_bytes(google_credentials_upload.getvalue())
+                settings_manager.secure_file(credentials_path)
+                updates["google_credentials_path"] = str(credentials_path)
+
+            settings_manager.update_values(updates)
+
+            if openai_key_input.strip():
+                settings_manager.set_api_key("openai", openai_key_input.strip())
+            elif openai_clear:
+                settings_manager.set_api_key("openai", None)
+
+            if gemini_key_input.strip():
+                settings_manager.set_api_key("gemini", gemini_key_input.strip())
+            elif gemini_clear:
+                settings_manager.set_api_key("gemini", None)
+
+            st.session_state["ocr_processor"] = None
+            st.success("Settings saved locally. Restart processing to apply changes.")
+
+        reset_clicked = st.button(
+            "Reset settings to defaults",
+            type="secondary",
+            use_container_width=True,
+        )
+        if reset_clicked:
+            defaults = {
+                key: value
+                for key, value in SettingsManager.DEFAULTS.items()
+                if key != "api_keys"
+            }
+            settings_manager.update_values(defaults)
+            for provider in ("openai", "gemini", "google"):
+                settings_manager.set_api_key(provider, None)
+            st.session_state["ocr_processor"] = None
+            st.success("Settings restored to defaults.")
+
+
+def process_image(image_path, ocr_processor):
     """Process a single receipt image."""
+    app_settings = st.session_state.get("app_settings", {})
     
     # Read the image
     if image_path.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -49,24 +438,72 @@ def process_image(image_path, ocr_processor, classifier_processor, description_d
         "shop_name": None,
         "payment_mode": None,
         "total_amount": None,
-        "items": [],  # or None, depending on how you want to handle it
+        "vat_amount": 0,
+        "transaction_date": None,
+        "notes": "",
+        "items": [],
         "receipt_pathfile": image_path,
     }
     
     # Process receipt using OCR
     if ocr_processor:
-        receipt_data = ocr_processor.process_receipt(image_path)
+        process_kwargs = {}
+        try:
+            signature = inspect.signature(ocr_processor.process_receipt)
+            if "enable_price_count" in signature.parameters:
+                process_kwargs["enable_price_count"] = app_settings.get(
+                    "enable_price_count", False
+                )
+            if "debug_mode" in signature.parameters:
+                process_kwargs["debug_mode"] = app_settings.get("debug_mode", False)
+        except (AttributeError, ValueError, TypeError):  # pragma: no cover
+            process_kwargs = {}
+
+        processed_data = ocr_processor.process_receipt(image_path, **process_kwargs)
+        if isinstance(processed_data, dict):
+            receipt_data.update(processed_data)
+
+    receipt_data["transaction_date"] = format_date_for_storage(
+        receipt_data.get("transaction_date")
+    )
     
-    # Classify items
-    if classifier_processor:
-        receipt_data = classify_items(receipt_data, classifier_processor, description_dictionary)
+    # Normalise receipt structure
+    receipt_data.setdefault("shop_name", None)
+    receipt_data.setdefault("payment_mode", None)
+    receipt_data.setdefault("total_amount", None)
+    receipt_data.setdefault("vat_amount", 0)
+    receipt_data.setdefault("transaction_date", None)
+    receipt_data.setdefault("notes", "")
+    receipt_data["items"] = []
 
     return {"image": original_image, "receipt_data": receipt_data}
+
+
+def process_file_bytes(file_name, file_bytes, ocr_processor):
+    """Process an in-memory file by writing it to a temporary location."""
+    temp_path = f"temp_{file_name}"
+    with open(temp_path, "wb") as temp_file:
+        temp_file.write(file_bytes)
+    try:
+        return process_image(temp_path, ocr_processor)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
 
 def save_to_json(results, file_path):
     """Save results to JSON file."""
     serializable_results = [
-        {"receipt_data": result["receipt_data"]} for result in results
+        {
+            "receipt_data": {
+                **result["receipt_data"],
+                "transaction_date": format_date_for_storage(
+                    result["receipt_data"].get("transaction_date")
+                ),
+                "notes": result["receipt_data"].get("notes", ""),
+            }
+        }
+        for result in results
     ]
     with open(file_path, "w") as json_file:
         json.dump(serializable_results, json_file, indent=4)
@@ -76,71 +513,197 @@ def save_to_csv(results, file_path):
     rows = []
     for result in results:
         receipt_data = result["receipt_data"]
-        for item in receipt_data["items"]:
+        if not receipt_data["items"]:
             rows.append(
                 {
-                    "item": item["name"],
-                    "code": item["code"],
-                    "code_desc": item["code_desc"],
-                    "price": item["price"],
-                    "prob": item["prob"],
+                    "item": "",
+                    "code": "",
+                    "code_desc": "",
+                    "price": "",
+                    "prob": "",
                     "shop_name": receipt_data["shop_name"],
                     "image_path": receipt_data.get("receipt_pathfile", ""),
                     "payment_mode": receipt_data.get("payment_mode", ""),
+                    "total_amount": receipt_data.get("total_amount", ""),
+                    "vat_amount": receipt_data.get("vat_amount", ""),
+                    "transaction_date": receipt_data.get("transaction_date", ""),
+                    "notes": receipt_data.get("notes", ""),
                 }
             )
+        else:
+            for item in receipt_data["items"]:
+                rows.append(
+                    {
+                        "item": item.get("name", ""),
+                        "code": item.get("code", ""),
+                        "code_desc": item.get("code_desc", ""),
+                        "price": item.get("price", ""),
+                        "prob": item.get("prob", ""),
+                        "shop_name": receipt_data["shop_name"],
+                        "image_path": receipt_data.get("receipt_pathfile", ""),
+                        "payment_mode": receipt_data.get("payment_mode", ""),
+                        "total_amount": receipt_data.get("total_amount", ""),
+                        "vat_amount": receipt_data.get("vat_amount", ""),
+                        "transaction_date": receipt_data.get("transaction_date", ""),
+                        "notes": receipt_data.get("notes", ""),
+                    }
+                )
     df = pd.DataFrame(rows)
     df.to_csv(file_path, index=False)
 
 
-def update_code_descriptions(df, coicop_dict):
-    """Update COICOP descriptions based on codes."""
-    
-    if not df.empty:
-       df = df.copy()
-       df['code_desc'] = df['code'].astype(str).map(lambda x: coicop_dict.get(str(x), ""))
-    return df
+def autosave_results():
+    """Persist current results after each receipt is handled."""
+    autosave_path = st.session_state.get("autosave_path", "receipt_autosave.json")
+    if st.session_state.results:
+        try:
+            save_to_json(st.session_state.results, autosave_path)
+        except OSError as exc:  # pragma: no cover
+            st.warning(f"Autosave failed: {exc}")
+
+
+def update_receipt_status(file_name, status, message=None):
+    """Update or append the processing status for a receipt."""
+    found = False
+    for entry in st.session_state.receipt_status:
+        if entry["file"] == file_name:
+            entry["status"] = status
+            if message:
+                entry["message"] = message
+            elif "message" in entry:
+                entry.pop("message")
+            found = True
+            break
+    if not found:
+        entry = {"file": file_name, "status": status}
+        if message:
+            entry["message"] = message
+        st.session_state.receipt_status.append(entry)
+
+    update_process_counts()
+
+
+def update_process_counts():
+    """Recompute completion counters based on receipt statuses."""
+    total = st.session_state.process_counts.get("total", 0)
+    completed = sum(
+        1 for entry in st.session_state.receipt_status if entry["status"] in {"processed", "skipped"}
+    )
+    st.session_state.process_counts = {"completed": completed, "total": total}
 
 
 def initialize_session_state():
     """Initialize or reset session state variables."""
+    try:
+        settings_manager = get_settings_manager()
+    except Exception:  # pragma: no cover - fallback if settings cannot load
+        settings_manager = None
+
+    def resolve_setting(key, fallback):
+        if not settings_manager:
+            return fallback
+        value = settings_manager.get_value(key, fallback)
+        if isinstance(value, str):
+            value = value.strip()
+            return value if value else fallback
+        return value
+
+    ocr_model_value = resolve_setting("ocr_model", config.ocr_model)
+    try:
+        ocr_model_setting = int(ocr_model_value)
+    except (TypeError, ValueError):
+        ocr_model_setting = config.ocr_model
+
+    resolved_settings = {
+        "ocr_model": ocr_model_setting,
+        "debug_mode": resolve_setting("debug_mode", config.debug_mode),
+        "enable_preprocessing": resolve_setting(
+            "enable_preprocessing", config.enable_preprocessing
+        ),
+        "save_processed_image": resolve_setting(
+            "save_processed_image", config.save_processed_image
+        ),
+        "enable_price_count": resolve_setting(
+            "enable_price_count", config.enable_price_count
+        ),
+        "classifier_model_path": resolve_setting(
+            "classifier_model_path", config.classifier_model_path
+        ),
+        "label_encoder_path": resolve_setting(
+            "label_encoder_path", config.label_encoder_path
+        ),
+        "tesseract_cmd_path": resolve_setting(
+            "tesseract_cmd_path", config.tesseract_cmd_path
+        ),
+        "google_credentials_path": resolve_setting(
+            "google_credentials_path", config.google_credentials_path
+        ),
+    }
+    st.session_state["app_settings"] = resolved_settings
+
+    openai_api_key = (
+        settings_manager.get_api_key("openai") if settings_manager else config.openai_api_key
+    )
+    gemini_api_key = (
+        settings_manager.get_api_key("gemini") if settings_manager else config.gemini_api_key
+    )
+
     if "results" not in st.session_state:
         print('Initialise st.session_state.results = []')
         st.session_state.results = []
     if "current_index" not in st.session_state:
         print('Initialise st.session_state.current_index = 0')
         st.session_state.current_index = 0
-    if "edited_data" not in st.session_state:
-        print('Initialise st.session_state.edited_data = {}')
-        st.session_state.edited_data = {}
-    if "last_edited_df" not in st.session_state:
-        print('Initialise st.session_state.last_edited_df = None')
-        st.session_state.last_edited_df = None
+    if "receipt_status" not in st.session_state:
+        st.session_state.receipt_status = []
+    if "failed_receipts" not in st.session_state:
+        st.session_state.failed_receipts = []
+    if "process_counts" not in st.session_state:
+        st.session_state.process_counts = {"completed": 0, "total": 0}
+    if "processing_queue" not in st.session_state:
+        st.session_state.processing_queue = []
+    if "processing_active" not in st.session_state:
+        st.session_state.processing_active = False
+    if "autosave_path" not in st.session_state:
+        st.session_state.autosave_path = "receipt_autosave.json"
         
-    # initialise OCR processor and text classifier
-    # Initialize OCR processor based on config
+    # initialise OCR processor
     if "ocr_processor" not in st.session_state:
         st.session_state.ocr_processor = None
 
-        if config.ocr_model == 1:
+        if resolved_settings["ocr_model"] == 1:
             from scannerai.ocr.lcf_receipt_process_openai import LCFReceiptProcessOpenai
-            st.session_state.ocr_processor  = LCFReceiptProcessOpenai(config.open_api_key_path)
+
+            st.session_state.ocr_processor = LCFReceiptProcessOpenai(
+                openai_api_key_path=config.open_api_key_path,
+                tesseract_cmd_path=resolved_settings["tesseract_cmd_path"],
+                openai_api_key=openai_api_key,
+            )
             if st.session_state.ocr_processor.get_InitSuccess():
                 st.sidebar.info("Using OpenAI OCR Model")
             else:
                 st.error("OCR processor initialization failed.")
             
-        elif config.ocr_model == 2:
+        elif resolved_settings["ocr_model"] == 2:
             from scannerai.ocr.lcf_receipt_process_gpt4vision import LCFReceiptProcessGPT4Vision
-            st.session_state.ocr_processor  = LCFReceiptProcessGPT4Vision(config.openai_api_key_path)
+
+            st.session_state.ocr_processor = LCFReceiptProcessGPT4Vision(
+                openai_api_key_path=config.openai_api_key_path,
+                openai_api_key=openai_api_key,
+            )
             if st.session_state.ocr_processor.get_InitSuccess():
                 st.sidebar.info("Using GPT-4 Vision OCR Model")
             else:
                 st.error("OCR processor initialization failed.")
             
-        elif config.ocr_model == 3:
+        elif resolved_settings["ocr_model"] == 3:
             from scannerai.ocr.lcf_receipt_process_gemini import LCFReceiptProcessGemini 
-            st.session_state.ocr_processor  = LCFReceiptProcessGemini(config.google_credentials_path, config.gemini_api_key_path)
+
+            st.session_state.ocr_processor = LCFReceiptProcessGemini(
+                google_credentials_path=resolved_settings["google_credentials_path"],
+                gemini_api_key_path=config.gemini_api_key_path,
+                gemini_api_key=gemini_api_key,
+            )
             if st.session_state.ocr_processor.get_InitSuccess():
                 st.sidebar.info("Using Gemini OCR Model")
             else:
@@ -149,62 +712,6 @@ def initialize_session_state():
         else:
             st.error("WARNING: No OCR Model is set!")
         
-    # load text classifier
-    if "lcf_classifier" not in st.session_state:
-        st.session_state.lcf_classifier = lcf_classifier(
-        config.classifier_model_path, config.label_encoder_path)
-        if not st.session_state.lcf_classifier.get_InitSuccess():
-            st.error("LCF classifier initialization failed.")
-            
-    # load COICOP description data
-    if "coicop_dict" not in st.session_state:
-        ROOT_DIR = os.path.abspath(os.curdir)
-        coicop_pathfile = os.path.join(ROOT_DIR+'/data/9123_volume_d_expenditure_codes_2021-22.xlsx')
-        coicop_df = pd.read_excel(coicop_pathfile, sheet_name='Part 1')
-        st.session_state.coicop_dict = dict(zip(coicop_df['LCF CODE'], coicop_df['Description'].str.strip()))
-
-
-def on_data_change():
-    """Callback function for data editor changes."""
-    current_index = st.session_state.current_index
-    editor_key = f"items_editor_{current_index}"
-    
-    if editor_key in st.session_state:
-        # Get the edit state from the data editor
-        edit_state = st.session_state[editor_key]
-        
-        # Get the current dataframe from our stored state
-        current_df = st.session_state.edited_data.get(current_index, pd.DataFrame())
-        
-        # Handle deleted rows
-        if 'deleted_rows' in edit_state and edit_state['deleted_rows']:
-            current_df = current_df.drop(edit_state['deleted_rows'])
-            # Reset index after deletion to ensure continuous indexing
-            current_df = current_df.reset_index(drop=True)
-        
-        # Apply the edits from edit_state
-        if 'edited_rows' in edit_state:
-            for idx, row_edits in edit_state['edited_rows'].items():
-                if idx < len(current_df):  # Make sure the index exists
-                    for col, value in row_edits.items():
-                        current_df.at[idx, col] = value
-        
-        # Handle added rows
-        if 'added_rows' in edit_state and edit_state['added_rows']:
-            new_rows = pd.DataFrame(edit_state['added_rows'])
-            current_df = pd.concat([current_df, new_rows], ignore_index=True)
-        
-        # Update code descriptions
-        current_df = update_code_descriptions(current_df, st.session_state.coicop_dict)
-        
-        # Store the updated dataframe
-        st.session_state.edited_data[current_index] = current_df
-        
-        # Update the main results with the modified data
-        st.session_state.results[current_index]["receipt_data"]["items"] = current_df.to_dict("records")
-
-
-
 def main():
     """To execute interface."""
     st.title("Receipt Data Entry System")
@@ -225,39 +732,23 @@ def main():
 
         if uploaded_files:
             if st.button("Process Uploaded Files"):
-                progress_bar = st.progress(0)
-                
-                #reset results and index
+                files_data = [
+                    {"name": file.name, "data": file.getvalue()}
+                    for file in uploaded_files
+                ]
+
                 st.session_state.results = []
                 st.session_state.current_index = 0
-                st.session_state.edited_data = {}
-                st.session_state.last_edited_df = None
-
-                for i, file in enumerate(uploaded_files):
-                    # Save temporary file
-                    print(file.name)
-                    temp_path = f"temp_{file.name}"
-                    with open(temp_path, "wb") as f:
-                        f.write(file.getvalue())
-
-                    # Process receipt
-                    result = process_image(temp_path, st.session_state.ocr_processor,\
-                        st.session_state.lcf_classifier, \
-                        st.session_state.coicop_dict)
-                    
-                    if result:
-                        st.session_state.results.append(result)
-
-                    # Update progress
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-                    os.remove(temp_path)
-                    
-                    # print('st.session_state.results:\n', st.session_state.results)
-
-                st.success(
-                    f"Processed {len(st.session_state.results)} receipts"
-                )
-                
+                st.session_state.receipt_status = []
+                st.session_state.failed_receipts = []
+                st.session_state.processing_queue = files_data
+                st.session_state.process_counts = {
+                    "completed": 0,
+                    "total": len(files_data),
+                }
+                st.session_state.processing_active = True
+                autosave_results()
+                force_rerun()
 
         # Navigation with state preservation
         if st.session_state.results:
@@ -276,15 +767,203 @@ def main():
         if st.session_state.results:
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
-            if st.button("Export"):
-                if export_format == "JSON":
-                    save_to_json(st.session_state.results, "receipt_data.json")
-                    st.success("Data exported to receipt_data.json")
+
+            if tk and filedialog:
+                if st.button("Export"):
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    default_ext = ".json" if export_format == "JSON" else ".csv"
+                    filetypes = (
+                        [("JSON files", "*.json")]
+                        if export_format == "JSON"
+                        else [("CSV files", "*.csv")]
+                    )
+                    selected = filedialog.asksaveasfilename(
+                        defaultextension=default_ext,
+                        filetypes=filetypes,
+                        initialfile=f"receipt_data{default_ext}",
+                    )
+                    root.destroy()
+                    if selected:
+                        expected_ext = ".json" if export_format == "JSON" else ".csv"
+                        root_path, ext = os.path.splitext(selected)
+                        file_path = (
+                            selected
+                            if ext.lower() == expected_ext
+                            else f"{root_path}{expected_ext}"
+                        )
+                        try:
+                            if export_format == "JSON":
+                                save_to_json(st.session_state.results, file_path)
+                            else:
+                                save_to_csv(st.session_state.results, file_path)
+                        except OSError as exc:
+                            st.error(f"Failed to export data: {exc}")
+                        else:
+                            st.success(f"Data exported to {file_path}")
+                            st.session_state.export_path = file_path
+                    else:
+                        st.info("Export cancelled.")
+            else:
+                st.info(
+                    "Tkinter not available in this environment; please enter a full export path."
+                )
+                export_path = st.text_input(
+                    "Export path",
+                    value=st.session_state.get("export_path", ""),
+                    key="export_path_input",
+                    help="Provide a full path including file name.",
+                )
+                if st.button("Export"):
+                    if not export_path:
+                        st.error("Please enter a valid file path.")
+                    else:
+                        expected_ext = ".json" if export_format == "JSON" else ".csv"
+                        root_path, ext = os.path.splitext(export_path)
+                        file_path = (
+                            export_path
+                            if ext.lower() == expected_ext
+                            else f"{root_path}{expected_ext}"
+                        )
+                        try:
+                            if export_format == "JSON":
+                                save_to_json(st.session_state.results, file_path)
+                            else:
+                                save_to_csv(st.session_state.results, file_path)
+                        except OSError as exc:
+                            st.error(f"Failed to export data: {exc}")
+                        else:
+                            st.success(f"Data exported to {file_path}")
+                            st.session_state.export_path = file_path
+        if st.session_state.processing_active and st.session_state.processing_queue:
+            queue_entry = st.session_state.processing_queue[0]
+            counts = st.session_state.process_counts
+            total = max(counts["total"], 1)
+            completed = counts["completed"]
+            progress_ratio = completed / total
+            progress_text = (
+                f"Processing {queue_entry['name']} ({completed + 1}/{total})..."
+            )
+            progress_bar = st.progress(progress_ratio, text=progress_text)
+
+            update_receipt_status(queue_entry["name"], "processing")
+
+            try:
+                result = process_file_bytes(
+                    queue_entry["name"], queue_entry["data"], st.session_state.ocr_processor
+                )
+                if result:
+                    result["receipt_data"]["processing_status"] = "processed"
+                    st.session_state.results.append(result)
+                    update_receipt_status(queue_entry["name"], "processed")
                 else:
-                    save_to_csv(st.session_state.results, "receipt_data.csv")
-                    st.success("Data exported to receipt_data.csv")
+                    update_receipt_status(queue_entry["name"], "error", "No data returned.")
+                    st.session_state.failed_receipts.append(
+                        {
+                            "name": queue_entry["name"],
+                            "data": queue_entry["data"],
+                            "error": "No data returned.",
+                        }
+                    )
+            except Exception as exc:  # pragma: no cover
+                update_receipt_status(queue_entry["name"], "error", str(exc))
+                st.session_state.failed_receipts.append(
+                    {
+                        "name": queue_entry["name"],
+                        "data": queue_entry["data"],
+                        "error": str(exc),
+                    }
+                )
+            finally:
+                autosave_results()
+                st.session_state.processing_queue.pop(0)
+
+            counts = st.session_state.process_counts
+            total = max(counts["total"], 1)
+            updated_ratio = counts["completed"] / total
+            status_text = f"Completed {counts['completed']} / {total}"
+            progress_bar.progress(updated_ratio, text=status_text)
+
+            if st.session_state.processing_queue:
+                force_rerun()
+            else:
+                st.session_state.processing_active = False
+                st.success("Processing complete.")
+
+        counts = st.session_state.process_counts
+        if counts["total"] > 0:
+            st.markdown(
+                f"<div style='text-align:center; font-weight:600;'>Completed {counts['completed']} / {counts['total']}</div>",
+                unsafe_allow_html=True,
+            )
+
+        if st.session_state.receipt_status:
+            st.write("Processing status:")
+            for entry in st.session_state.receipt_status:
+                status = entry["status"]
+                file_name = entry["file"]
+                message = entry.get("message")
+                bullet = "🟢" if status == "processed" else ("⚠️" if status == "skipped" else "🔴")
+                text = f"{bullet} {file_name} — {status.capitalize()}"
+                if message and status not in {"processed", "skipped"}:
+                    text += f" ({message})"
+                st.write(text)
+
+    render_settings_panel()
 
     # Main content area
+    if st.session_state.failed_receipts:
+        st.warning("Some receipts could not be processed. Retry or skip to continue.")
+        for idx, failed in list(enumerate(st.session_state.failed_receipts)):
+            cols = st.columns([3, 1, 1])
+            with cols[0]:
+                error_msg = failed.get("error", "Unknown error")
+                st.write(f"**{failed['name']}** — {error_msg}")
+            with cols[1]:
+                if st.button("Retry", key=f"retry_failed_{idx}"):
+                    try:
+                        result = process_file_bytes(
+                            failed["name"], failed["data"], st.session_state.ocr_processor
+                        )
+                        if result:
+                            result["receipt_data"]["processing_status"] = "processed"
+                            st.session_state.results.append(result)
+                            update_receipt_status(failed["name"], "processed")
+                            autosave_results()
+                            st.session_state.failed_receipts.pop(idx)
+                            force_rerun()
+                        else:
+                            update_receipt_status(failed["name"], "error", "No data returned.")
+                            failed["error"] = "No data returned."
+                            st.error("Retry failed: no data returned.")
+                    except Exception as exc:  # pragma: no cover
+                        update_receipt_status(failed["name"], "error", str(exc))
+                        failed["error"] = str(exc)
+                        st.error(f"Retry failed: {exc}")
+            with cols[2]:
+                if st.button("Skip", key=f"skip_failed_{idx}"):
+                    placeholder = {
+                        "image": None,
+                        "receipt_data": {
+                            "shop_name": None,
+                            "payment_mode": "EFT",
+                            "total_amount": None,
+                            "vat_amount": 0,
+                            "transaction_date": None,
+                            "notes": "",
+                            "items": [],
+                            "receipt_pathfile": failed["name"],
+                            "processing_status": "skipped",
+                        },
+                    }
+                    st.session_state.results.append(placeholder)
+                    update_receipt_status(failed["name"], "skipped", "Marked as skipped by user.")
+                    autosave_results()
+                    st.session_state.failed_receipts.pop(idx)
+                    st.success(f"Skipped {failed['name']}")
+                    force_rerun()
+
     if st.session_state.results:
         current_result = st.session_state.results[st.session_state.current_index]
         current_index = st.session_state.current_index
@@ -295,91 +974,416 @@ def main():
         with col1:
             st.subheader("Receipt Image")
             image = current_result["image"]
-            # Draw bounding boxes
-            image_with_boxes = image.copy()
-            for item in current_result["receipt_data"]["items"]:
-                if "bounding_boxes" in item and item["bounding_boxes"]:
-                    for x, y, w, h in item["bounding_boxes"]:
-                        cv2.rectangle(
-                            image_with_boxes,
-                            (x, y),
-                            (x + w, y + h),
-                            (0, 255, 0),
-                            2,
-                        )
-            st.image(image_with_boxes, use_column_width=True)
+            if image is None:
+                st.info("No image available for this receipt.")
+            else:
+                image_src = image_array_to_base64(image)
+                viewer_id = f"receipt-viewer-{current_index}"
+                image_id = f"receipt-img-{current_index}"
+                zoom_in_id = f"zoom-in-{current_index}"
+                zoom_out_id = f"zoom-out-{current_index}"
+                reset_id = f"zoom-reset-{current_index}"
+                zoom_info_id = f"zoom-info-{current_index}"
+
+                viewer_html = f"""
+                <style>
+                    #{viewer_id} {{
+                        width: 100%;
+                        height: 600px;
+                        overflow: hidden;
+                        border: 1px solid #d9d9d9;
+                        border-radius: 6px;
+                        background: #f7f7f7;
+                        position: relative;
+                        cursor: grab;
+                        touch-action: none;
+                    }}
+                    #{viewer_id} img {{
+                        display: block;
+                        transform-origin: 0 0;
+                        user-select: none;
+                        -webkit-user-drag: none;
+                        transition: transform 0.08s ease-out;
+                    }}
+                    .zoom-controls {{
+                        position: absolute;
+                        top: 10px;
+                        right: 10px;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                        z-index: 5;
+                    }}
+                    .zoom-controls button {{
+                        width: 34px;
+                        height: 34px;
+                        border: 1px solid #cfcfcf;
+                        border-radius: 4px;
+                        background: #fff;
+                        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+                        font-size: 18px;
+                        cursor: pointer;
+                    }}
+                    .zoom-controls button:hover {{
+                        background: #f0f0f0;
+                    }}
+                    #{zoom_info_id} {{
+                        position: absolute;
+                        left: 10px;
+                        bottom: 10px;
+                        background: rgba(0, 0, 0, 0.65);
+                        color: #fff;
+                        font-size: 12px;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        z-index: 5;
+                    }}
+                </style>
+                <div id="{viewer_id}">
+                    <img id="{image_id}" src="{image_src}" alt="Receipt image" draggable="false" />
+                    <div class="zoom-controls">
+                        <button id="{zoom_in_id}" aria-label="Zoom in">+</button>
+                        <button id="{zoom_out_id}" aria-label="Zoom out">−</button>
+                        <button id="{reset_id}" aria-label="Reset zoom">⌂</button>
+                    </div>
+                    <div id="{zoom_info_id}">50%</div>
+                </div>
+                <script>
+                    (function() {{
+                        const viewer = document.getElementById("{viewer_id}");
+                        const img = document.getElementById("{image_id}");
+                        const zoomInBtn = document.getElementById("{zoom_in_id}");
+                        const zoomOutBtn = document.getElementById("{zoom_out_id}");
+                        const resetBtn = document.getElementById("{reset_id}");
+                        const info = document.getElementById("{zoom_info_id}");
+                        if (!viewer || !img) return;
+
+                        const MIN_SCALE = 0.2;
+                        const MAX_SCALE = 5.0;
+                        let scale = 0.5;
+                        let offsetX = 0;
+                        let offsetY = 0;
+                        let isPanning = false;
+                        let startX = 0;
+                        let startY = 0;
+                        let startOffsetX = 0;
+                        let startOffsetY = 0;
+                        const activeTouches = new Map();
+                        let pinchStartDistance = null;
+                        let pinchStartScale = null;
+
+                        const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+                        const applyTransform = () => {{
+                            img.style.transform = `translate(${{offsetX}}px, ${{offsetY}}px) scale(${{scale}})`;
+                            if (info) {{
+                                info.textContent = `${{Math.round(scale * 100)}}%`;
+                            }}
+                        }};
+
+                        const setScale = (newScale, originX, originY) => {{
+                            const clampedScale = clamp(newScale, MIN_SCALE, MAX_SCALE);
+                            const rect = viewer.getBoundingClientRect();
+                            const relativeX = originX - rect.left;
+                            const relativeY = originY - rect.top;
+                            const imageX = (relativeX - offsetX) / scale;
+                            const imageY = (relativeY - offsetY) / scale;
+                            scale = clampedScale;
+                            offsetX = relativeX - imageX * scale;
+                            offsetY = relativeY - imageY * scale;
+                            applyTransform();
+                        }};
+
+                        const centerImage = () => {{
+                            const rect = viewer.getBoundingClientRect();
+                            const naturalWidth = img.naturalWidth || rect.width;
+                            const naturalHeight = img.naturalHeight || rect.height;
+                            const displayWidth = naturalWidth * scale;
+                            const displayHeight = naturalHeight * scale;
+                            offsetX = (rect.width - displayWidth) / 2;
+                            const extraY = rect.height - displayHeight;
+                            offsetY = extraY > 0 ? extraY / 2 : 0;
+                            applyTransform();
+                        }};
+
+                        const startPan = (clientX, clientY) => {{
+                            isPanning = true;
+                            startX = clientX;
+                            startY = clientY;
+                            startOffsetX = offsetX;
+                            startOffsetY = offsetY;
+                            viewer.style.cursor = "grabbing";
+                        }};
+
+                        const movePan = (clientX, clientY) => {{
+                            if (!isPanning) return;
+                            offsetX = startOffsetX + (clientX - startX);
+                            offsetY = startOffsetY + (clientY - startY);
+                            applyTransform();
+                        }};
+
+                        const endPan = () => {{
+                            if (!isPanning) return;
+                            isPanning = false;
+                            viewer.style.cursor = "grab";
+                        }};
+
+                        const getViewerCenter = () => {{
+                            const rect = viewer.getBoundingClientRect();
+                            return {{
+                                x: rect.left + rect.width / 2,
+                                y: rect.top + rect.height / 2,
+                            }};
+                        }};
+
+                        const handleWheel = (event) => {{
+                            if (event.ctrlKey) {{
+                                event.preventDefault();
+                                const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+                                setScale(scale * zoomFactor, event.clientX, event.clientY);
+                            }} else {{
+                                offsetX -= event.deltaX;
+                                offsetY -= event.deltaY;
+                                applyTransform();
+                                event.preventDefault();
+                            }}
+                        }};
+
+                        const pointerIsTouch = (event) =>
+                            event.pointerType === "touch" || event.pointerType === "pen";
+
+                        const updateTouch = (event) => {{
+                            activeTouches.set(event.pointerId, {{ x: event.clientX, y: event.clientY }});
+                        }};
+
+                        const getTouchInfo = () => {{
+                            if (activeTouches.size < 2) return null;
+                            const points = Array.from(activeTouches.values());
+                            const dx = points[0].x - points[1].x;
+                            const dy = points[0].y - points[1].y;
+                            return {{
+                                distance: Math.hypot(dx, dy),
+                                center: {{
+                                    x: (points[0].x + points[1].x) / 2,
+                                    y: (points[0].y + points[1].y) / 2,
+                                }},
+                            }};
+                        }};
+
+                        zoomInBtn?.addEventListener("click", (event) => {{
+                            event.preventDefault();
+                            const center = getViewerCenter();
+                            setScale(scale * 1.2, center.x, center.y);
+                        }});
+
+                        zoomOutBtn?.addEventListener("click", (event) => {{
+                            event.preventDefault();
+                            const center = getViewerCenter();
+                            setScale(scale / 1.2, center.x, center.y);
+                        }});
+
+                        resetBtn?.addEventListener("click", (event) => {{
+                            event.preventDefault();
+                            scale = 0.5;
+                            centerImage();
+                        }});
+
+                        viewer.addEventListener("wheel", handleWheel, {{ passive: false }});
+
+                        viewer.addEventListener("mousedown", (event) => {{
+                            if (event.button !== 0) return;
+                            startPan(event.clientX, event.clientY);
+                        }});
+
+                        const mouseMoveListener = (event) => {{
+                            if (!isPanning) return;
+                            movePan(event.clientX, event.clientY);
+                        }};
+
+                        const mouseUpListener = () => {{
+                            endPan();
+                        }};
+
+                        window.addEventListener("mousemove", mouseMoveListener);
+                        window.addEventListener("mouseup", mouseUpListener);
+                        viewer.addEventListener("mouseleave", endPan);
+
+                        viewer.addEventListener("pointerdown", (event) => {{
+                            if (!pointerIsTouch(event)) return;
+                            viewer.setPointerCapture(event.pointerId);
+                            updateTouch(event);
+                            if (activeTouches.size === 1) {{
+                                startPan(event.clientX, event.clientY);
+                            }} else if (activeTouches.size === 2) {{
+                                pinchStartScale = scale;
+                                const info = getTouchInfo();
+                                pinchStartDistance = info ? info.distance : null;
+                                endPan();
+                            }}
+                        }});
+
+                        viewer.addEventListener("pointermove", (event) => {{
+                            if (!activeTouches.has(event.pointerId)) return;
+                            updateTouch(event);
+                            if (activeTouches.size === 1) {{
+                                event.preventDefault();
+                                movePan(event.clientX, event.clientY);
+                            }} else if (activeTouches.size === 2) {{
+                                event.preventDefault();
+                                const info = getTouchInfo();
+                                if (info && pinchStartDistance) {{
+                                    const factor = info.distance / pinchStartDistance;
+                                    setScale(pinchStartScale * factor, info.center.x, info.center.y);
+                                }}
+                            }}
+                        }});
+
+                        const releaseTouch = (event) => {{
+                            if (!activeTouches.has(event.pointerId)) return;
+                            activeTouches.delete(event.pointerId);
+                            viewer.releasePointerCapture(event.pointerId);
+                            if (activeTouches.size === 0) {{
+                                pinchStartDistance = null;
+                                pinchStartScale = null;
+                                endPan();
+                            }} else if (activeTouches.size === 1) {{
+                                const remaining = Array.from(activeTouches.values())[0];
+                                pinchStartDistance = null;
+                                pinchStartScale = null;
+                                startPan(remaining.x, remaining.y);
+                            }}
+                        }};
+
+                        viewer.addEventListener("pointerup", releaseTouch);
+                        viewer.addEventListener("pointercancel", releaseTouch);
+
+                        const initialize = () => {{
+                            centerImage();
+                        }};
+
+                        if (img.complete) {{
+                            initialize();
+                        }} else {{
+                            img.addEventListener("load", initialize, {{ once: true }});
+                        }}
+
+                        return () => {{
+                            window.removeEventListener("mousemove", mouseMoveListener);
+                            window.removeEventListener("mouseup", mouseUpListener);
+                        }};
+                    }})();
+                </script>
+                """
+
+                components.html(viewer_html, height=620, width=None)
 
         with col2:
             st.subheader("Receipt Data")
 
             # Shop details
             receipt_data = current_result["receipt_data"]
-            
+
             # Create unique keys for each input field
             shop_key = f"shop_name_{current_index}"
             total_key = f"total_amount_{current_index}"
-            payment_key = f"payment_mode_{current_index}"
-            
+            vat_key = f"vat_amount_{current_index}"
+            date_key = f"transaction_date_{current_index}"
+            payment_select_key = f"payment_mode_select_{current_index}"
+            payment_manual_key = f"payment_mode_manual_{current_index}"
+            notes_key = f"notes_{current_index}"
+
+            # 1. Shop Name
             new_shop_name = st.text_input(
                 "Shop Name",
                 value=receipt_data["shop_name"],
-                key=shop_key
+                key=shop_key,
             )
+            receipt_data["shop_name"] = new_shop_name
+
+            # 2. Total Amount
             new_total = st.text_input(
                 "Total Amount",
-                value=receipt_data.get("total_amount", ""),
-                key=total_key
+                value=format_currency_string(receipt_data.get("total_amount")),
+                key=total_key,
             )
-            new_payment_mode = st.text_input(
+            parsed_total = parse_float(new_total)
+            if parsed_total is not None:
+                receipt_data["total_amount"] = f"{parsed_total:.2f}"
+            else:
+                receipt_data["total_amount"] = new_total.strip() or None
+
+            # 3. VAT Amount
+            current_vat = receipt_data.get("vat_amount", 0) or 0
+            try:
+                current_vat_float = float(current_vat)
+            except (TypeError, ValueError):
+                current_vat_float = 0.0
+            new_vat = st.number_input(
+                "VAT Amount",
+                min_value=0.0,
+                value=float(current_vat_float),
+                step=0.01,
+                key=vat_key,
+            )
+            receipt_data["vat_amount"] = round(new_vat, 2)
+
+            # 4. Transaction Date
+            existing_date = receipt_data.get("transaction_date", "")
+            parsed_date = parse_date_string(existing_date)
+            date_display_value = parsed_date.isoformat() if parsed_date else (existing_date or "")
+            new_date = st.text_input(
+                "Transaction Date (YYYY-MM-DD)",
+                value=date_display_value,
+                key=date_key,
+                placeholder="YYYY-MM-DD",
+            )
+            formatted_date = format_date_for_storage(new_date)
+            if new_date.strip() and not formatted_date:
+                st.warning("Unable to parse the transaction date. Please use YYYY-MM-DD format.")
+            receipt_data["transaction_date"] = formatted_date if formatted_date else new_date.strip() or None
+
+            # 5. Payment Mode
+            payment_options = ["CASH", "CARD", "EFT", "Enter manually"]
+            existing_payment = receipt_data.get("payment_mode") or ""
+            standard_payments = {"CASH", "CARD", "EFT"}
+            if existing_payment and isinstance(existing_payment, str) and existing_payment.upper() in standard_payments:
+                default_index = payment_options.index(existing_payment.upper())
+            else:
+                default_index = payment_options.index("Enter manually")
+
+            selected_payment_mode = st.selectbox(
                 "Payment Mode",
-                value=receipt_data.get("payment_mode", ""),
-                key=payment_key
+                options=payment_options,
+                index=default_index,
+                key=payment_select_key,
             )
 
-            # Update values in session state
-            receipt_data["shop_name"] = new_shop_name
-            receipt_data["total_amount"] = new_total
-            receipt_data["payment_mode"] = new_payment_mode
+            manual_payment_mode = None
+            if selected_payment_mode == "Enter manually":
+                manual_default = (
+                    existing_payment if existing_payment and existing_payment.upper() not in standard_payments else ""
+                )
+                manual_payment_mode = st.text_input(
+                    "Payment Mode (manual entry)",
+                    value=manual_default,
+                    key=payment_manual_key,
+                ).strip()
+                receipt_data["payment_mode"] = manual_payment_mode
+            else:
+                receipt_data["payment_mode"] = selected_payment_mode
 
-            # Items table
+            # 6. Notes
+            notes_value = st.text_area(
+                "Notes",
+                value=receipt_data.get("notes", ""),
+                key=notes_key,
+                height=80,
+            )
+            receipt_data["notes"] = notes_value.strip()
+
+            # Items table notice
             st.subheader("Items")
-            
-            # Get the current edited data from session state or create new
-            editor_key = f"items_editor_{current_index}"
-            
-             # Initialize or get the current dataframe
-            if current_index not in st.session_state.edited_data:
-                items_df = pd.DataFrame(current_result["receipt_data"]["items"])
-                items_df = update_code_descriptions(items_df, st.session_state.coicop_dict)
-                st.session_state.edited_data[current_index] = items_df
-            
-            items_df = st.session_state.edited_data[current_index]
-            
-            # Display the data editor
-            _ = st.data_editor(
-                items_df,
-                num_rows="dynamic",
-                key=editor_key,
-                column_config={
-                    "name": "Item Name",
-                    "price": "Price",
-                    "code": "COICOP Code",
-                    "code_desc": st.column_config.Column(
-                        "COICOP Description",
-                        disabled=True,
-                    ),
-                    "prob": st.column_config.NumberColumn(
-                        "Confidence Score",
-                        format="%.2f",
-                    ),
-                },
-                on_change=on_data_change
-            )
-            
-            # Add a "Save Changes" button to force update
-            # if st.button("Save Changes", key=f"save_changes_{current_index}"):
-            #     st.success("Changes saved successfully!")
-            #     st.experimental_rerun()
+            st.info("Item capture has been disabled for this workflow.")
                     
     else:
         st.info("Upload receipt images to begin processing")
