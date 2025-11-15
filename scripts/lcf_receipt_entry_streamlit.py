@@ -715,8 +715,12 @@ def main():
                 autosave_results()
                 force_rerun()
 
-        # Home button
-        if st.session_state.results:
+        # Home button - only show when processing is complete and on first image
+        processing_complete = not st.session_state.get("processing_active", False)
+        has_results = bool(st.session_state.results)
+        is_first_image = st.session_state.current_index == 0
+        
+        if processing_complete and has_results and is_first_image:
             if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
                 st.session_state.results = []
                 st.session_state.current_index = 0
@@ -724,11 +728,13 @@ def main():
                 st.session_state.failed_receipts = []
                 st.session_state.processing_queue = []
                 st.session_state.processing_active = False
+                st.session_state.process_counts = {"completed": 0, "total": 0}
+                # Clear uploaded files by rerunning
                 st.rerun()
             st.divider()
         
-        # Navigation with state preservation
-        if st.session_state.results:
+        # Navigation with state preservation - only show when processing is complete and on first image
+        if processing_complete and has_results and is_first_image:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Previous") and st.session_state.current_index > 0:
@@ -740,8 +746,8 @@ def main():
                     st.session_state.current_index += 1
             st.write(f"Receipt {st.session_state.current_index + 1} of {len(st.session_state.results)}")
 
-        # Export options
-        if st.session_state.results:
+        # Export options - only show when processing is complete and on first image
+        if processing_complete and has_results and is_first_image:
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
@@ -868,8 +874,13 @@ def main():
                 st.session_state.processing_active = False
                 st.success("Processing complete.")
 
+        # Only show "Completed */*" when processing is active or just completed (and on first image)
         counts = st.session_state.process_counts
-        if counts["total"] > 0:
+        processing_active = st.session_state.get("processing_active", False)
+        has_results_main = bool(st.session_state.results)
+        is_first_image_main = st.session_state.current_index == 0
+        
+        if counts["total"] > 0 and (processing_active or (has_results_main and is_first_image_main)):
             st.markdown(
                 f"<div style='text-align:center; font-weight:600;'>Completed {counts['completed']} / {counts['total']}</div>",
                 unsafe_allow_html=True,
