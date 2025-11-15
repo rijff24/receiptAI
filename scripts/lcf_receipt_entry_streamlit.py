@@ -757,22 +757,40 @@ def main():
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
+            # Get item capture setting
+            settings_manager = get_settings_manager()
+            snapshot = settings_manager.get_settings_snapshot()
+            enable_item_capture = snapshot.get("enable_item_capture", True)
+
             # Prepare export data
             if export_format == "JSON":
                 import json
-                serializable_results = [
-                    {
-                        "receipt_data": {
-                            **result["receipt_data"],
-                            "transaction_date": format_date_for_storage(
-                                result["receipt_data"].get("transaction_date")
-                            ),
-                            "notes": result["receipt_data"].get("notes", ""),
-                        },
-                        "file_name": result.get("file_name") or os.path.basename(result["receipt_data"].get("receipt_pathfile", "")),
+                serializable_results = []
+                for result in st.session_state.results:
+                    receipt_data = result["receipt_data"].copy()
+                    
+                    # Build export data with all fields
+                    export_receipt_data = {
+                        "shop_name": receipt_data.get("shop_name"),
+                        "total_amount": receipt_data.get("total_amount"),
+                        "vat_amount": receipt_data.get("vat_amount", 0),
+                        "payment_mode": receipt_data.get("payment_mode"),
+                        "transaction_date": format_date_for_storage(
+                            receipt_data.get("transaction_date")
+                        ),
+                        "notes": receipt_data.get("notes", ""),
+                        "receipt_pathfile": receipt_data.get("receipt_pathfile", ""),
                     }
-                    for result in st.session_state.results
-                ]
+                    
+                    # Only include items if item capture is enabled
+                    if enable_item_capture and "items" in receipt_data:
+                        export_receipt_data["items"] = receipt_data["items"]
+                    
+                    serializable_results.append({
+                        "receipt_data": export_receipt_data,
+                        "file_name": result.get("file_name") or os.path.basename(receipt_data.get("receipt_pathfile", "")),
+                    })
+                
                 export_data = json.dumps(serializable_results, indent=4, ensure_ascii=False)
                 mime_type = "application/json"
                 file_extension = "json"
@@ -781,37 +799,45 @@ def main():
                 for result in st.session_state.results:
                     receipt_data = result["receipt_data"]
                     file_name = result.get("file_name") or os.path.basename(receipt_data.get("receipt_pathfile", ""))
-                    if not receipt_data["items"]:
-                        rows.append(
-                            {
-                                "item": "",
-                                "code": "",
-                                "code_desc": "",
-                                "price": "",
-                                "prob": "",
-                                "file_name": file_name,
-                                "shop_name": receipt_data.get("shop_name", ""),
-                                "total_amount": receipt_data.get("total_amount", ""),
-                                "payment_mode": receipt_data.get("payment_mode", ""),
-                                "transaction_date": receipt_data.get("transaction_date", ""),
-                            }
-                        )
-                    else:
+                    
+                    # Base fields that are always included
+                    base_row = {
+                        "file_name": file_name,
+                        "shop_name": receipt_data.get("shop_name", ""),
+                        "total_amount": receipt_data.get("total_amount", ""),
+                        "vat_amount": receipt_data.get("vat_amount", ""),
+                        "payment_mode": receipt_data.get("payment_mode", ""),
+                        "transaction_date": receipt_data.get("transaction_date", ""),
+                        "notes": receipt_data.get("notes", ""),
+                        "receipt_pathfile": receipt_data.get("receipt_pathfile", ""),
+                    }
+                    
+                    # Include items only if item capture is enabled
+                    if enable_item_capture and receipt_data.get("items"):
                         for item in receipt_data["items"]:
-                            rows.append(
-                                {
-                                    "item": item.get("item_name", ""),
-                                    "code": item.get("coicop", ""),
-                                    "code_desc": item.get("coicop_desc", ""),
-                                    "price": item.get("price", ""),
-                                    "prob": item.get("confidence", ""),
-                                    "file_name": file_name,
-                                    "shop_name": receipt_data.get("shop_name", ""),
-                                    "total_amount": receipt_data.get("total_amount", ""),
-                                    "payment_mode": receipt_data.get("payment_mode", ""),
-                                    "transaction_date": receipt_data.get("transaction_date", ""),
-                                }
-                            )
+                            row = base_row.copy()
+                            row.update({
+                                "item": item.get("item_name", item.get("name", "")),
+                                "code": item.get("coicop", item.get("code", "")),
+                                "code_desc": item.get("coicop_desc", item.get("code_desc", "")),
+                                "price": item.get("price", ""),
+                                "prob": item.get("confidence", item.get("prob", "")),
+                            })
+                            rows.append(row)
+                    elif enable_item_capture:
+                        # Item capture enabled but no items - add empty item columns
+                        base_row.update({
+                            "item": "",
+                            "code": "",
+                            "code_desc": "",
+                            "price": "",
+                            "prob": "",
+                        })
+                        rows.append(base_row)
+                    else:
+                        # Items disabled - just include base fields (no item columns)
+                        rows.append(base_row)
+                
                 df = pd.DataFrame(rows)
                 export_data = df.to_csv(index=False)
                 mime_type = "text/csv"
