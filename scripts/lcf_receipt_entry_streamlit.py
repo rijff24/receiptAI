@@ -722,12 +722,11 @@ def main():
                 autosave_results()
                 force_rerun()
 
-        # Home button - only show when processing is complete and on first image
+        # Home button - show when processing is complete and results exist
         processing_complete = not st.session_state.get("processing_active", False)
         has_results = bool(st.session_state.results)
-        is_first_image = st.session_state.current_index == 0
         
-        if processing_complete and has_results and is_first_image:
+        if processing_complete and has_results:
             if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
                 st.session_state.results = []
                 st.session_state.current_index = 0
@@ -740,8 +739,8 @@ def main():
                 st.rerun()
             st.divider()
         
-        # Navigation with state preservation - only show when processing is complete and on first image
-        if processing_complete and has_results and is_first_image:
+        # Navigation with state preservation - show when processing is complete and results exist
+        if processing_complete and has_results:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Previous") and st.session_state.current_index > 0:
@@ -753,8 +752,8 @@ def main():
                     st.session_state.current_index += 1
             st.write(f"Receipt {st.session_state.current_index + 1} of {len(st.session_state.results)}")
 
-        # Export options - only show when processing is complete and on first image
-        if processing_complete and has_results and is_first_image:
+        # Export options - show when processing is complete and results exist
+        if processing_complete and has_results:
             st.header("Export Data")
             export_format = st.selectbox("Export format", ["JSON", "CSV"])
 
