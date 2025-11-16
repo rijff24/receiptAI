@@ -12,6 +12,14 @@ ScannerAI is a Python application that processes retail receipts using computer 
 - **Export Options**: Save processed data in JSON or CSV formats
 - **Progress Tracking**: Visual progress tracking for batch operations
 
+## Hosted Application
+
+You can try ScannerAI instantly at [receiptai.streamlit.app](https://receiptai.streamlit.app/). The hosted build runs the exact same Streamlit interface that lives in this repository:
+
+- You still bring your own API keys (OpenAI, Gemini, Google). Paste them into **Application Settings** just like the desktop version.
+- Secrets are encrypted and stored locally on the Streamlit Cloud workspace—nothing is written back to GitHub.
+- The hosted instance is perfect for demos or quick reviews, while self-hosted installs remain available for offline or air‑gapped workflows.
+
 ## User Interface
 ![ScannerAI User Interface](interface_streamlit.png)
 
@@ -106,6 +114,8 @@ The above model is trained based on Logistic Regression (LR) using a popular fea
 streamlit run scripts/lcf_receipt_entry_streamlit.py
 ```
 
+> Prefer not to run locally? Visit [receiptai.streamlit.app](https://receiptai.streamlit.app/) and use the hosted UI. You will still need to provide your own API keys via the settings sidebar.
+
 #### Basic Workflow
 
 1. Click "Browse files" to select receipt images/PDFs
@@ -132,13 +142,15 @@ print(json.dumps(result, indent=2))
 
 ## Project Structure
 
-- `lcf_receipt_entry_streamlit.py`: Main GUI application using streamlit
-- `lcf_receipt_process_gemini.py`: Receipt processing using Gemini Vision API
-- `lcf_receipt_process_gpt4vision.py`: Receipt processing using OpenAI model gpt-4o-mini
-- `lcf_receipt_process_openai.py`: Receipt processing using Tesseract to extract string from an image and then input to OpenAI model gpt-3.5-turbo
-- `lcf_classify.py`: COICOP classification implementation
-- `scanner_utils.py`: Utility functions
-- `config.py`: Configuration management
+- `scripts/lcf_receipt_entry_streamlit.py`: Main Streamlit UI (uploads, navigation, editing, export)
+- `scannerai/ocr/`: OCR processors (Gemini Vision, GPT-4o mini, Tesseract + GPT-3.5)
+- `scannerai/classifiers/`: COICOP classification utilities and trained models
+- `scannerai/settings/`: Settings manager with encryption + keyring integration
+- `scannerai/_config/`: Legacy/headless configuration helpers
+- `scannerai/utils/`: Shared helpers (PDF merging, token counting, etc.)
+- `scannerai/settings/settings_manager.py`: Entry point for all settings and secure storage logic
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for an in-depth developer-oriented walkthrough.
 
 ## Dependencies
 
@@ -154,6 +166,15 @@ ScannerAI now ships with an in-app settings manager. Launch the Streamlit UI, ex
 - OpenAI / Gemini API keys (stored encrypted on your machine)
 
 See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-edit instructions if you need to manage the JSON file programmatically.
+
+### Additional Documentation
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) – Deep dive into modules, data flow, and extension points.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) – How to propose changes, coding standards, and contributor recognition.
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) – Streamlit Cloud + self-host deployment instructions and common pitfalls.
+- [`SECURITY.md`](SECURITY.md) – Responsible disclosure process and hardening tips.
+- [`SETTINGS.md`](SETTINGS.md) – UI walkthrough for configuring OCR providers, paths, and API keys.
+- [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) – FAQ for installation, OCR, and hosting issues.
 
 ### Pre-commit actions
 
@@ -183,6 +204,24 @@ This repository contains a configuration of pre-commit hooks. These are language
 - Uploaded Google credentials stay inside the local ScannerAI settings directory and inherit restrictive file permissions.
 - `.gitignore` excludes autosaves, local configs, and credential files by default—please keep it that way when contributing.
 - See `SECURITY.md` for the coordinated disclosure process.
+
+# Development Roadmap
+
+### Near-Term Improvements
+
+- **Receipt categorization:** Automatically tag incoming receipts by department/category.
+- **Navigation optimizations:** Preload the previous and next two receipts while you review the current one to make paging instant, and loop "Next" from the last receipt back to the first.
+- **Context highlighting:** When you hover a textbox, highlight the region on the receipt image where that value was extracted.
+- **Template hints:** Allow users to teach ScannerAI where each field lives for specific companies so parsing becomes deterministic.
+
+### Long-Term Vision
+
+- **Reinforcement learning:** Capture reviewer corrections and feed them into a learning loop so OCR output improves over time.
+- **UI/UX refresh:** Modernize the Streamlit interface with clearer states, keyboard shortcuts, and improved accessibility.
+- **Security hardening:** Expand threat modeling, secrets management, and audit logging to support enterprise deployments.
+- **Data backend:** Connect to a database (cloud or self-hosted) for persistent storage of receipts, metadata, and audit history.
+- **Mobile capture:** Upload directly from a smartphone camera into the platform.
+- **Accounting integrations:** Bulk-import receipts into major accounting suites, starting with Sage Cloud Accounting, then expanding to other popular systems.
 
 # Credits
 
