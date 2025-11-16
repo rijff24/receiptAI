@@ -748,7 +748,10 @@ def initialize_session_state():
         st.session_state.autosave_path = "receipt_autosave.json"
         
     # initialise OCR processor
-    if "ocr_processor" not in st.session_state:
+    needs_ocr_initialise = (
+        "ocr_processor" not in st.session_state or st.session_state.ocr_processor is None
+    )
+    if needs_ocr_initialise:
         st.session_state.ocr_processor = None
 
         if resolved_settings["ocr_model"] == 1:
