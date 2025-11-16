@@ -6,7 +6,7 @@ We aim to keep the latest `main` branch patched and secure. Older tags or forks 
 
 ## Reporting a Vulnerability
 
-Please report security issues privately to `security@scannerai.app` (placeholder contact). Include:
+Please report security issues privately to `rijff@swan-computing.com`. Include:
 
 - Description of the issue and potential impact
 - Steps to reproduce or proof-of-concept
@@ -28,4 +28,3 @@ We will acknowledge receipt within 3 working days and keep you informed of progr
 - Run `ruff`/`pytest` before submitting pull requests.
 
 Thank you for helping keep ScannerAI secure for everyone.
-
