@@ -17,6 +17,10 @@ import streamlit.components.v1 as components
 from streamlit.runtime.scriptrunner import RerunException, RerunData
 
 from PIL import Image
+
+# Force hosted-mode defaults when running the public Streamlit instance.
+os.environ.setdefault("SCANNERAI_HOSTED_MODE", "1")
+
 from scannerai._config.config import config
 from scannerai.settings import SettingsManager
 from scannerai.utils.scanner_utils import merge_pdf_pages
@@ -131,22 +135,75 @@ def render_settings_panel():
         settings_manager = get_settings_manager()
     except Exception:
         return
-    snapshot = settings_manager.get_settings_snapshot()
-    api_status = snapshot.get("api_keys", {})
-    model_keys = list(OCR_MODEL_OPTIONS.keys())
-    current_model = snapshot.get("ocr_model", 2)  # Default to GPT-4 Vision
-    default_index = (
-        model_keys.index(current_model) if current_model in model_keys else model_keys.index(2)
-    )
-    existing_google_credentials_path = snapshot.get("google_credentials_path", "")
 
     with st.sidebar.expander("Application Settings", expanded=False):
-        st.caption(
-            f"Settings are stored locally at: `{settings_manager.settings_path}`"
+        hosted_mode = settings_manager.is_hosted_mode
+        if hosted_mode:
+            st.caption(
+                "Hosted mode: settings live only for this session. Export them after saving to keep a local copy."
+            )
+        else:
+            st.caption(
+                f"Settings are stored locally at: `{settings_manager.settings_path}`"
+            )
+
+        import_settings_file = st.file_uploader(
+            "Import encrypted settings file",
+            type=["json"],
+            key="settings_import_uploader",
+            help="Upload the JSON file you downloaded previously.",
         )
-        
+        import_passphrase = st.text_input(
+            "Import passphrase",
+            type="password",
+            key="settings_import_passphrase",
+            help="Enter the passphrase that was used to encrypt the exported settings.",
+        )
+        import_triggered = st.button(
+            "Import settings",
+            key="import_settings_button",
+            use_container_width=True,
+        )
+        if import_triggered:
+            if import_settings_file is None:
+                st.error("Select a settings file to import.")
+            elif not import_passphrase.strip():
+                st.error("Enter the passphrase for the uploaded settings file.")
+            else:
+                try:
+                    payload_text = import_settings_file.getvalue().decode("utf-8")
+                    payload = json.loads(payload_text)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    st.error("The uploaded file is not valid JSON.")
+                else:
+                    try:
+                        settings_manager.import_encrypted(payload, import_passphrase.strip())
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state["app_settings"] = settings_manager.export_settings()
+                        st.session_state["ocr_processor"] = None
+                        st.success("Settings imported into this session.")
+        st.divider()
+
         # Refresh snapshot
         snapshot = settings_manager.get_settings_snapshot()
+        api_status = snapshot.get("api_keys", {})
+        model_keys = list(OCR_MODEL_OPTIONS.keys())
+        current_model = snapshot.get("ocr_model", 2)  # Default to GPT-4 Vision
+        default_index = (
+            model_keys.index(current_model) if current_model in model_keys else model_keys.index(2)
+        )
+        existing_google_credentials_path = snapshot.get("google_credentials_path", "")
+        allow_file_uploads = not hosted_mode
+        classifier_model_upload = None
+        label_encoder_upload = None
+        google_credentials_upload = None
+        if not allow_file_uploads:
+            st.info(
+                "File uploads (model files or Google credentials) are disabled in hosted mode. "
+                "Download your settings instead and configure file paths when running locally."
+            )
         
         # Settings inputs (no form wrapper)
         ocr_model = st.selectbox(
@@ -184,12 +241,13 @@ def render_settings_panel():
             value=classifier_path_value,
             help="Path to your trained classification model file (.sav). Used for COICOP code classification. If not provided, COICOP and confidence columns will display None. You can also upload a file below.",
         )
-        classifier_model_upload = st.file_uploader(
-            "Upload Classifier Model",
-            type=["sav"],
-            key="classifier_model_uploader",
-            help="Upload a .sav classifier model file. The file will be saved to your ScannerAI settings folder.",
-        )
+        if allow_file_uploads:
+            classifier_model_upload = st.file_uploader(
+                "Upload Classifier Model",
+                type=["sav"],
+                key="classifier_model_uploader",
+                help="Upload a .sav classifier model file. The file will be saved to your ScannerAI settings folder.",
+            )
         
         # Label encoder path with file uploader
         encoder_path_value = snapshot.get("label_encoder_path", "")
@@ -198,12 +256,13 @@ def render_settings_panel():
             value=encoder_path_value,
             help="Path to your label encoder file (.pkl). This should be generated together with the trained classifier model. If not available, COICOP classification will not work. You can also upload a file below.",
         )
-        label_encoder_upload = st.file_uploader(
-            "Upload Label Encoder",
-            type=["pkl"],
-            key="label_encoder_uploader",
-            help="Upload a .pkl label encoder file. The file will be saved to your ScannerAI settings folder.",
-        )
+        if allow_file_uploads:
+            label_encoder_upload = st.file_uploader(
+                "Upload Label Encoder",
+                type=["pkl"],
+                key="label_encoder_uploader",
+                help="Upload a .pkl label encoder file. The file will be saved to your ScannerAI settings folder.",
+            )
         
         # Tesseract path - only show for model 1
         if ocr_model == 1:
@@ -225,12 +284,13 @@ def render_settings_panel():
                 help="Path to your Google service account JSON file. Required for Gemini OCR. This file contains credentials for accessing Google Cloud services. You can also upload a file below.",
             )
             
-            google_credentials_upload = st.file_uploader(
-                "Upload Google service account JSON",
-                type=["json"],
-                key="google_credentials_uploader",
-                help="Uploaded files are stored only on your machine inside the ScannerAI settings folder.",
-            )
+            if allow_file_uploads:
+                google_credentials_upload = st.file_uploader(
+                    "Upload Google service account JSON",
+                    type=["json"],
+                    key="google_credentials_uploader",
+                    help="Uploaded files are stored only on your machine inside the ScannerAI settings folder.",
+                )
         else:
             google_credentials_path = existing_google_credentials_path
             google_credentials_upload = None
@@ -275,12 +335,31 @@ def render_settings_panel():
             gemini_key_input = ""
             gemini_clear = False
 
+        if hosted_mode:
+            export_passphrase = st.text_input(
+                "Passphrase for exported settings",
+                type="password",
+                key="settings_export_passphrase",
+                help="Required to encrypt the settings file that you can download after saving.",
+            )
+        else:
+            export_passphrase = st.text_input(
+                "Passphrase for exported settings (optional)",
+                type="password",
+                key="settings_export_passphrase",
+                help="Provide a passphrase if you want to download an encrypted backup after saving.",
+            )
+
         save_settings = st.button(
             "Save Settings", use_container_width=True
         )
 
         if save_settings:
             validation_errors = []
+            if hosted_mode and not export_passphrase.strip():
+                validation_errors.append(
+                    "Enter a passphrase so your settings can be encrypted for download."
+                )
             if ocr_model in (1, 2) and not (openai_key_input.strip() or api_status.get("openai")):
                 validation_errors.append(
                     "An OpenAI API key is required for GPT-based OCR models."
@@ -349,8 +428,36 @@ def render_settings_panel():
             elif gemini_clear:
                 settings_manager.set_api_key("gemini", None)
 
+            st.session_state["app_settings"] = settings_manager.export_settings()
+
+            export_passphrase_clean = export_passphrase.strip()
+            if export_passphrase_clean:
+                try:
+                    export_payload = settings_manager.export_encrypted(export_passphrase_clean)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
+                st.session_state["settings_export_blob"] = json.dumps(export_payload, indent=2)
+            else:
+                st.session_state.pop("settings_export_blob", None)
+
             st.session_state["ocr_processor"] = None
-            st.success("Settings saved locally. Restart processing to apply changes.")
+            if hosted_mode:
+                st.success(
+                    "Settings saved for this session. Download the encrypted file below to reuse them later."
+                )
+            else:
+                st.success("Settings saved locally. Restart processing to apply changes.")
+
+        export_blob = st.session_state.get("settings_export_blob")
+        if export_blob:
+            st.download_button(
+                "Download encrypted settings file",
+                data=export_blob,
+                file_name=SettingsManager.EXPORT_FILENAME,
+                mime="application/json",
+                use_container_width=True,
+            )
 
         reset_clicked = st.button(
             "Reset settings to defaults",
@@ -358,16 +465,18 @@ def render_settings_panel():
             use_container_width=True,
         )
         if reset_clicked:
-            defaults = {
-                key: value
-                for key, value in SettingsManager.DEFAULTS.items()
-                if key != "api_keys"
-            }
-            settings_manager.update_values(defaults)
+            defaults = settings_manager.get_defaults()
+            scalar_defaults = {key: value for key, value in defaults.items() if key != "api_keys"}
+            settings_manager.update_values(scalar_defaults)
             for provider in ("openai", "gemini", "google"):
                 settings_manager.set_api_key(provider, None)
+            st.session_state["app_settings"] = settings_manager.export_settings()
+            st.session_state.pop("settings_export_blob", None)
             st.session_state["ocr_processor"] = None
-            st.success("Settings restored to defaults.")
+            if hosted_mode:
+                st.success("Settings restored to defaults for this session. Save and download the file to keep them.")
+            else:
+                st.success("Settings restored to defaults.")
 
 
 def process_image(image_path, ocr_processor):

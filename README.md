@@ -17,7 +17,7 @@ ScannerAI is a Python application that processes retail receipts using computer 
 You can try ScannerAI instantly at [receiptai.streamlit.app](https://receiptai.streamlit.app/). The hosted build runs the exact same Streamlit interface that lives in this repository:
 
 - You still bring your own API keys (OpenAI, Gemini, Google). Paste them into **Application Settings** just like the desktop version.
-- Secrets are encrypted and stored locally on the Streamlit Cloud workspace—nothing is written back to GitHub.
+- Hosted deployments run with `SCANNERAI_HOSTED_MODE=1`, so settings never touch the server’s filesystem. Instead, each user enters a passphrase, downloads `scannerai_settings.json`, and re-imports it later to restore their preferences and encrypted API keys.
 - The hosted instance is perfect for demos or quick reviews, while self-hosted installs remain available for offline or air‑gapped workflows.
 
 ## User Interface
@@ -66,6 +66,7 @@ pip install -r requirements.txt
 
 - Settings are stored under `%APPDATA%\ScannerAI\user_settings.json` on Windows or `~/.config/ScannerAI/user_settings.json` on macOS/Linux.
 - Uploaded Google service-account JSON files are saved alongside the settings and never leave your device.
+- Hosting centrally? Set `SCANNERAI_HOSTED_MODE=1` and follow the export/import workflow described in [`SETTINGS.md`](SETTINGS.md) so credentials stay on each user’s machine.
 
 **Headless / legacy configuration**
 

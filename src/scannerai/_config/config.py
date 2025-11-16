@@ -24,6 +24,8 @@ SETTINGS_KEY_MAP = {
     "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
 }
 
+HOSTED_MODE_ENV_VAR = "SCANNERAI_HOSTED_MODE"
+
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -63,6 +65,11 @@ def _load_settings_manager_overrides() -> Dict[str, Any]:
     return overrides
 
 
+def _hosted_mode_enabled() -> bool:
+    """Return True when the hosted-mode environment flag is set."""
+    return _coerce_bool(os.environ.get(HOSTED_MODE_ENV_VAR), False)
+
+
 def load_config(config_file: str):
     """Load configuration from the legacy text file and settings manager."""
     file_values = dotenv_values(config_file) if os.path.exists(config_file) else {}
@@ -88,6 +95,7 @@ def load_config(config_file: str):
         "OPENAI_API_KEY": None,
         "GEMINI_API_KEY": None,
         "GOOGLE_API_KEY": None,
+        "HOSTED_MODE": _hosted_mode_enabled(),
     }
 
     overrides = _load_settings_manager_overrides()
@@ -198,10 +206,20 @@ class Config:
         """Get decrypted Google API key when stored via settings."""
         return self._config.get("GOOGLE_API_KEY")
 
+    @property
+    def hosted_mode(self) -> bool:
+        """Return True when hosted mode is enabled."""
+        return self._config.get("HOSTED_MODE", False)
+
 
 # Create a global instance
 CONFIG_FILE_PATH = os.path.join(os.path.dirname(__file__), "config.txt")
 config = Config(CONFIG_FILE_PATH)
+
+
+def is_hosted_mode() -> bool:
+    """Convenience helper to check whether hosted mode is active."""
+    return config.hosted_mode
 
 # Usage example:
 # from scannerai.config.config import config

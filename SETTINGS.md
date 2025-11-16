@@ -23,6 +23,18 @@ The directory also contains:
 - `.scannerai.key` (fallback encryption key if an OS keyring is unavailable)
 - `google_credentials.json` (if you upload a service-account file via the UI)
 
+## Hosted Mode (stateless servers)
+
+Set the environment variable `SCANNERAI_HOSTED_MODE=1` before launching Streamlit when you deploy ScannerAI to a shared or cloud host. In hosted mode:
+
+- The server never writes `user_settings.json`, encryption keys, or uploaded credential/model files to disk. Settings exist only in memory for the current browser session.
+- File upload controls for classifier models, label encoders, and Google credentials are hidden because those assets cannot be stored safely on the host.
+- Users must provide a passphrase when they click **Save Settings**. ScannerAI encrypts the entire settings payload (including already encrypted API keys) with PBKDF2 + Fernet and offers a download named `scannerai_settings.json`.
+- To reuse settings, users upload the JSON file via **Import encrypted settings**, enter the same passphrase, and the values (and API keys) are restored for that session only.
+- If the passphrase is lost, the exported file cannot be decrypted. Re-enter the settings manually and download a new file.
+
+This workflow keeps per-user API keys on their own machines even though the UI is hosted centrally.
+
 ## Security Model
 
 - API keys are encrypted with `cryptography.Fernet`.
