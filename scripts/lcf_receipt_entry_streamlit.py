@@ -137,7 +137,13 @@ def render_settings_panel():
         return
 
     with st.sidebar.expander("Application Settings", expanded=False):
-        hosted_mode = settings_manager.is_hosted_mode
+        hosted_mode_attr = getattr(settings_manager, "is_hosted_mode", None)
+        if callable(hosted_mode_attr):
+            hosted_mode = hosted_mode_attr()
+        elif isinstance(hosted_mode_attr, bool):
+            hosted_mode = hosted_mode_attr
+        else:
+            hosted_mode = config.hosted_mode
         if hosted_mode:
             st.caption(
                 "Hosted mode: settings live only for this session. Export them after saving to keep a local copy."
