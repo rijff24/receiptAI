@@ -1,6 +1,6 @@
 # Contributing to ScannerAI
 
-Thank you for taking the time to contribute to ScannerAI! This project is a community-driven fork of the ONS Data Science Campus receipt scanner. Together we can keep the tool robust, privacy-preserving, and easy to use.
+Thank you for taking the time to contribute to ScannerAI! This project is a community-maintained fork of the [receipt_scanner](https://github.com/datasciencecampus/receipt_scanner) project originally developed by the Data Science Campus at the Office for National Statistics. Together we can keep the tool robust, privacy-preserving, and easy to use.
 
 ## Ways to Help
 
@@ -20,8 +20,8 @@ Thank you for taking the time to contribute to ScannerAI! This project is a comm
 
 1. **Set up environment**
    ```bash
-   git clone https://github.com/<your-org>/scannerai.git
-   cd scannerai/receipt_scanner
+   git clone https://github.com/rijff24/receiptAI.git
+   cd receipt_scanner
    python -m venv scanner-venv
    scanner-venv\Scripts\activate  # or source scanner-venv/bin/activate
    pip install -e ".[dev]"
@@ -41,15 +41,6 @@ Thank you for taking the time to contribute to ScannerAI! This project is a comm
 
 Do **not** open a public issue for security vulnerabilities. Instead, email `rijff@swan-computing.com` with as much detail as possible. See `SECURITY.md` for the full policy.
 
-## Contributors App
-
-We maintain a simple Contributors dashboard inside the hosted app. After your pull request is merged:
-
-1. Visit [receiptai.streamlit.app](https://receiptai.streamlit.app/) and open **Contributors** in the sidebar.
-2. Add your GitHub handle, the feature/category you worked on, and a short blurb.
-3. Submit—your details will appear in the community list and help new collaborators find active areas.
-
-Prefer the manual route? Add yourself to the **Credits** section of `README.md` in the same pull request.
 
 ## Documentation Expectations
 
