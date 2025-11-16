@@ -190,6 +190,7 @@ def render_settings_panel():
                         st.session_state["app_settings"] = settings_manager.export_settings()
                         st.session_state["ocr_processor"] = None
                         st.success("Settings imported into this session.")
+                        force_rerun()
         st.divider()
 
         # Refresh snapshot
