@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - fall back to file-based key
 
 
 HOSTED_MODE_ENV_VAR = "SCANNERAI_HOSTED_MODE"
-EXPORT_SCHEMA_VERSION = 1
+EXPORT_SCHEMA_VERSION = 2
 EXPORT_SALT_BYTES = 16
 EXPORT_KDF_ITERATIONS = 390000
 
@@ -191,7 +191,17 @@ class SettingsManager:
         """Export all settings into an encrypted JSON payload."""
         salt = secrets.token_bytes(EXPORT_SALT_BYTES)
         derived_key = _derive_export_key(passphrase, salt)
-        payload_bytes = json.dumps(self.export_settings()).encode("utf-8")
+        settings_blob = self.export_settings()
+        api_keys_plain: Dict[str, Optional[str]] = {}
+        encrypted_keys = settings_blob.pop("api_keys", {}) or {}
+        for provider, token in encrypted_keys.items():
+            api_keys_plain[provider] = self._decrypt(token)
+
+        payload_data = {
+            "settings": settings_blob,
+            "api_keys": api_keys_plain,
+        }
+        payload_bytes = json.dumps(payload_data).encode("utf-8")
         ciphertext = Fernet(derived_key).encrypt(payload_bytes)
         return {
             "version": EXPORT_SCHEMA_VERSION,
@@ -222,12 +232,26 @@ class SettingsManager:
             raise ValueError("Could not decrypt settings export; check your passphrase.") from exc
 
         try:
-            file_data = json.loads(decrypted.decode("utf-8"))
+            payload_data = json.loads(decrypted.decode("utf-8"))
         except json.JSONDecodeError as exc:  # pragma: no cover - defensive
             raise ValueError("Export payload contained invalid JSON data.") from exc
 
+        if version >= 2 and isinstance(payload_data, dict):
+            file_data = payload_data.get("settings", {})
+            plaintext_keys = payload_data.get("api_keys", {}) or {}
+        else:  # legacy exports (< v2) stored the raw settings dict
+            file_data = payload_data
+            plaintext_keys = {}
+
+        if not isinstance(file_data, dict):
+            raise ValueError("Export settings payload is malformed.")
+
         self._settings = self._merge_with_defaults(file_data)
         self.save_settings()
+
+        for provider, api_key in plaintext_keys.items():
+            if provider and isinstance(provider, str):
+                self.set_api_key(provider, api_key)
 
     def update_values(self, updates: Dict[str, Any]) -> None:
         """Update multiple scalar settings at once."""
