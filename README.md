@@ -11,6 +11,7 @@ ScannerAI is a Python application that processes retail receipts using computer 
 - **In-App Settings**: Configure OCR providers, API keys, and local paths directly from the UI
 - **Export Options**: Save processed data in JSON or CSV formats
 - **Progress Tracking**: Visual progress tracking for batch operations
+- **Processing Controls**: Cancel long-running batches or exit the session safely
 
 ## Hosted Application
 
@@ -179,6 +180,13 @@ See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-
 - [`SETTINGS.md`](SETTINGS.md) – UI walkthrough for configuring OCR providers, paths, and API keys.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) – FAQ for installation, OCR, and hosting issues.
 - [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) – Building and distributing the Windows desktop launcher (local branches).
+
+## Branch Strategy
+
+- `main`: production build for the hosted Streamlit deployment.
+- `cloud-dev`: staging area for upcoming hosted features before they land on `main`.
+- `local-dev`: active Windows desktop development (launcher, installer, shutdown hooks).
+- `local-main`: stable branch for publishing Windows releases.
 
 ### Pre-commit actions
 
