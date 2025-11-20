@@ -1131,7 +1131,6 @@ def main():
                 use_container_width=True,
             )
         if st.session_state.processing_active and st.session_state.processing_queue:
-        if st.session_state.processing_active and st.session_state.processing_queue:
             queue_entry = st.session_state.processing_queue[0]
             counts = st.session_state.process_counts
             total = max(counts["total"], 1)
