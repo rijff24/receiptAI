@@ -19,6 +19,7 @@ def main() -> int:
 
     # Ensure local mode and disable telemetry prompts for bundled builds.
     os.environ.setdefault("SCANNERAI_HOSTED_MODE", "0")
+    os.environ.setdefault("SCANNERAI_LOCAL_LAUNCHER", "1")
     os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "0")
 
     # Delegate to Streamlit's CLI entrypoint.
