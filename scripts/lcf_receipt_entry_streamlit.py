@@ -7,6 +7,7 @@ import os
 import re
 from datetime import date, datetime
 from io import BytesIO
+from typing import Optional
 
 
 import cv2
@@ -673,6 +674,44 @@ def update_process_counts():
     st.session_state.process_counts = {"completed": completed, "total": total}
 
 
+def cancel_processing(reason: Optional[str] = None) -> bool:
+    """Cancel any in-progress batch processing, preserving processed results."""
+    if not st.session_state.get("processing_active"):
+        return False
+    queue = st.session_state.get("processing_queue", [])
+    if not queue:
+        return False
+
+    skipped_count = len(queue)
+    skip_message = "Cancelled by user"
+    for entry in queue:
+        file_name = entry.get("name", "Receipt")
+        update_receipt_status(file_name, "skipped", skip_message)
+
+    st.session_state.processing_queue = []
+    st.session_state.processing_active = False
+    autosave_results()
+
+    summary = reason or "Processing cancelled. Partial results are available below."
+    summary_with_count = (
+        f"{summary} {skipped_count} pending receipt(s) were skipped."
+        if skipped_count
+        else summary
+    )
+    st.session_state["processing_cancelled_notice"] = summary_with_count
+    return True
+
+
+def request_exit(message: Optional[str] = None) -> None:
+    """Mark the current session for exit and stop further processing."""
+    st.session_state.processing_queue = []
+    st.session_state.processing_active = False
+    st.session_state["exit_requested"] = True
+    st.session_state["exit_message"] = (
+        message or "Session closed. You can safely close this tab."
+    )
+
+
 def initialize_session_state():
     """Initialize or reset session state variables."""
     try:
@@ -803,6 +842,14 @@ def main():
     # Initialize session state
     initialize_session_state()
 
+    if st.session_state.get("exit_requested"):
+        st.info(st.session_state.get("exit_message", "Session closed. You can close this tab."))
+        st.stop()
+
+    cancel_notice = st.session_state.pop("processing_cancelled_notice", None)
+    if cancel_notice:
+        st.warning(cancel_notice)
+
     # Sidebar for file upload and navigation
     with st.sidebar:
         st.header("Upload & Navigation")
@@ -847,8 +894,19 @@ def main():
         # Home button - show when results exist and processing is complete
         has_results = bool(st.session_state.results)
         processing_active = st.session_state.get("processing_active", False)
-        processing_queue_empty = not st.session_state.get("processing_queue", [])
-        
+        queue_has_items = bool(st.session_state.get("processing_queue", []))
+        processing_queue_empty = not queue_has_items
+
+        if processing_active and queue_has_items:
+            if st.button(
+                "Cancel Processing",
+                type="secondary",
+                use_container_width=True,
+                help="Stop processing remaining receipts and keep partial results.",
+            ):
+                if cancel_processing():
+                    force_rerun()
+
         # Show buttons when we have results and processing is not active (or queue is empty)
         processing_complete = not processing_active or (processing_queue_empty and has_results)
         if has_results and processing_complete:
@@ -979,6 +1037,7 @@ def main():
                 use_container_width=True,
             )
         if st.session_state.processing_active and st.session_state.processing_queue:
+        if st.session_state.processing_active and st.session_state.processing_queue:
             queue_entry = st.session_state.processing_queue[0]
             counts = st.session_state.process_counts
             total = max(counts["total"], 1)
@@ -1058,6 +1117,16 @@ def main():
                 if message and status not in {"processed", "skipped"}:
                     text += f" ({message})"
                 st.write(text)
+
+        st.divider()
+        if st.button(
+            "Exit Application",
+            type="secondary",
+            use_container_width=True,
+            help="End this session and close the app.",
+        ):
+            request_exit()
+            force_rerun()
 
     render_settings_panel()
 
