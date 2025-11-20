@@ -67,6 +67,7 @@ pip install -r requirements.txt
 - Settings are stored under `%APPDATA%\ScannerAI\user_settings.json` on Windows or `~/.config/ScannerAI/user_settings.json` on macOS/Linux.
 - Uploaded Google service-account JSON files are saved alongside the settings and never leave your device.
 - Hosting centrally? Set `SCANNERAI_HOSTED_MODE=1` and follow the export/import workflow described in [`SETTINGS.md`](SETTINGS.md) so credentials stay on each user’s machine.
+- Want a packaged Windows EXE? See [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) for the launcher and PyInstaller workflow (local branches).
 
 **Headless / legacy configuration**
 
@@ -150,6 +151,7 @@ print(json.dumps(result, indent=2))
 - `scannerai/_config/`: Legacy/headless configuration helpers
 - `scannerai/utils/`: Shared helpers (PDF merging, token counting, etc.)
 - `scannerai/settings/settings_manager.py`: Entry point for all settings and secure storage logic
+- `launch_scannerai.py`: Windows launcher script used by the packaged build (local branches)
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for an in-depth developer-oriented walkthrough.
 
@@ -176,6 +178,7 @@ See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-
 - [`SECURITY.md`](SECURITY.md) – Responsible disclosure process and hardening tips.
 - [`SETTINGS.md`](SETTINGS.md) – UI walkthrough for configuring OCR providers, paths, and API keys.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) – FAQ for installation, OCR, and hosting issues.
+- [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) – Building and distributing the Windows desktop launcher (local branches).
 
 ### Pre-commit actions
 
