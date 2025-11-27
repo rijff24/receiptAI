@@ -2,6 +2,12 @@
 
 This guide describes how to build a Windows-friendly executable for ScannerAI. The executable simply launches the existing Streamlit UI in your default browser, but ships with an embedded Python environment so end users do not need to install Python manually.
 
+> **For end users:** The latest packaged build lives on the GitHub release page: [ScannerAI Local Desktop - Alpha Pre-Release (v0.1.0-local-alpha)](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0). Download `ScannerAI.exe` from there unless you specifically need to rebuild the launcher.
+
+## For Developers
+
+This document targets contributors working on the **local desktop** experience (branches `local-dev` and `local-main`). Follow it when you need to regenerate `ScannerAI.exe`, test PyInstaller changes, or publish a new pre-release.
+
 ## Branch workflow
 
 - `main`: hosted (cloud) production.
@@ -22,7 +28,7 @@ The launcher script (`launch_scannerai.py`) and packaging configuration live on 
 
 ## Build steps
 
-1. From the repo root (`ScannerAI/receipt_scanner`), ensure dependencies are installed and the launcher is available:
+1. From the repo root (`ScannerAI/`), ensure dependencies are installed and the launcher is available:
 
    ```powershell
    python launch_scannerai.py --help  # should start Streamlit locally
@@ -44,7 +50,7 @@ The launcher script (`launch_scannerai.py`) and packaging configuration live on 
    - `--collect-all scannerai` ensures the package data (OCR models, settings schema) ships with the EXE.
    - `--add-data` bundles the Streamlit entry script relative to the executable.
 
-3. The build artifacts land in `dist/ScannerAI/`. `ScannerAI.exe` can be double-clicked or distributed as-is. The first run may show a Windows SmartScreen prompt; code-signing is recommended for wider distribution (future enhancement).
+3. The build artifacts land in `dist/ScannerAI/`. `ScannerAI.exe` can be double-clicked or distributed as-is. The first run may show a Windows SmartScreen prompt; code-signing is recommended for wider distribution (future enhancement). Tag alpha builds (e.g., `v0.1.0-local-alpha`) as **pre-releases** and upload the EXE to GitHub.
 
 4. (Optional) Wrap the `dist/ScannerAI` folder in an installer (e.g., WiX, Inno Setup) if you want a guided installation experience.
 

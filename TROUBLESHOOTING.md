@@ -8,6 +8,12 @@
 | `ModuleNotFoundError: scannerai` | Run `pip install -e .` or install via `requirements.txt` (which already includes `-e .`). |
 | `tkinter` import errors | The UI no longer depends on Tk—update to the latest `main`. |
 
+## Local Desktop (ScannerAI.exe)
+
+- **Windows SmartScreen warning** – The alpha build is unsigned. Click **More info → Run anyway** if you trust the binary from the [official release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0).
+- **Long first launch** – PyInstaller extracts dependencies on first run; subsequent launches are faster. Keep the console window open until the browser loads `http://localhost:8501`.
+- **Settings not persisting** – The launcher sets `SCANNERAI_HOSTED_MODE=0`, so settings live under `%APPDATA%\ScannerAI`. Ensure that directory is writable and refer to `SETTINGS.md`.
+
 ## Settings & API Keys
 
 - **Settings form missing** – Install `cryptography` + `keyring` (`pip install -r requirements.txt`).

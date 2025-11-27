@@ -1,6 +1,14 @@
 # ScannerAI - Receipt Scanner and Classifier
 ScannerAI is a Python application that processes retail receipts using computer vision and AI to extract, classify and analyze receipt data. It features a graphical user interface for viewing and editing receipt information with support for COICOP (Classification of Individual Consumption According to Purchase) code classification.
 
+## Two Versions (and Branches)
+ScannerAI ships in two deployment flavors that share the same codebase and Streamlit UI:
+
+- **Web Hosted Version** – Runs on Streamlit Cloud at [receiptai.streamlit.app](https://receiptai.streamlit.app/). Production lives on the `main` branch and new hosted features incubate on `cloud-dev`.
+- **Local Desktop Version** – A Windows executable (`ScannerAI.exe`) that launches Streamlit locally via the built-in launcher. Production releases live on `local-main` and ongoing desktop work happens on `local-dev`.
+
+The remainder of this document calls out when instructions differ between the hosted and local experiences.
+
 ## Features
 
 - **Receipt Processing**: Extract text and structured data from receipt images and PDFs
@@ -13,23 +21,30 @@ ScannerAI is a Python application that processes retail receipts using computer 
 - **Progress Tracking**: Visual progress tracking for batch operations
 - **Processing Controls**: Cancel long-running batches or exit the session safely
 
-## Hosted Application
+## Hosted Application (Streamlit Cloud)
 
-You can try ScannerAI instantly at [receiptai.streamlit.app](https://receiptai.streamlit.app/). The hosted build runs the exact same Streamlit interface that lives in this repository:
-
-- You still bring your own API keys (OpenAI, Gemini, Google). Paste them into **Application Settings** just like the desktop version.
-- Hosted deployments run with `SCANNERAI_HOSTED_MODE=1`, so settings never touch the server’s filesystem. Instead, each user enters a passphrase, downloads `scannerai_settings.json`, and re-imports it later to restore their preferences and encrypted API keys.
-- The hosted instance is perfect for demos or quick reviews, while self-hosted installs remain available for offline or air‑gapped workflows.
+- Visit [receiptai.streamlit.app](https://receiptai.streamlit.app/) to launch the hosted build immediately.
+- You still bring your own API keys (OpenAI, Gemini, Google) and paste them into **Application Settings** just like the desktop version.
+- Hosted deployments run with `SCANNERAI_HOSTED_MODE=1`, so settings never touch the server’s filesystem. Each user downloads an encrypted `scannerai_settings.json` and re-imports it later to restore their preferences and API keys.
+- Ideal for demos, quick reviews, or teams that don’t want to manage local environments.
 
 ## User Interface
 ![ScannerAI User Interface](interface_streamlit.png)
 
 ## Installation
 
+### Hosted (Web) Workflow
+
+1. Visit [receiptai.streamlit.app](https://receiptai.streamlit.app/).
+2. Enter your API keys in **Application Settings** (see [SETTINGS.md](SETTINGS.md)).
+3. Follow the same UI workflow described below—no local setup required.
+
+### Local Desktop Workflow (from source)
+
 **1. Clone the repository**
 ``` bash
 git clone https://github.com/rijff24/receiptAI.git
-cd receipt_scanner
+cd receiptAI
 ```
 
 **2. Set up virtual environment**
@@ -68,7 +83,7 @@ pip install -r requirements.txt
 - Settings are stored under `%APPDATA%\ScannerAI\user_settings.json` on Windows or `~/.config/ScannerAI/user_settings.json` on macOS/Linux.
 - Uploaded Google service-account JSON files are saved alongside the settings and never leave your device.
 - Hosting centrally? Set `SCANNERAI_HOSTED_MODE=1` and follow the export/import workflow described in [`SETTINGS.md`](SETTINGS.md) so credentials stay on each user’s machine.
-- Want a packaged Windows EXE? See [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) for the launcher and PyInstaller workflow (local branches).
+- Want the packaged Windows EXE? Download the [local desktop pre-release](#download-the-local-desktop-pre-release) or build it yourself via [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md).
 
 **Headless / legacy configuration**
 
@@ -105,7 +120,7 @@ The application requires API keys for OCR services:
 Use the **Application Settings** panel to paste keys directly—ScannerAI encrypts them with `cryptography.Fernet` and stores them locally. For headless deployments, provide file paths in `config.txt` as shown above. Never commit your keys to Git.
 
 ## Trained Model
-We put a trained model as an example in receipt_scanner/src/scannerai/classifiers/trainedModels/, where you can set LRCountVectorizer.sav for CLASSIFIER_MODEL_PATH and encoder.pkl for LABEL_ENCODER_PATH.
+We put a trained model as an example in src/scannerai/classifiers/trainedModels/, where you can set LRCountVectorizer.sav for CLASSIFIER_MODEL_PATH and encoder.pkl for LABEL_ENCODER_PATH.
 
 The above model is trained based on Logistic Regression (LR) using a popular feature extraction method, Countvectorizer implemented in Scikit-learn Python package.  
 
@@ -156,6 +171,20 @@ print(json.dumps(result, indent=2))
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for an in-depth developer-oriented walkthrough.
 
+## Download the Local Desktop Pre-release
+
+Want to run ScannerAI without installing Python? Grab the packaged Windows launcher:
+
+- **Release**: [ScannerAI Local Desktop - Alpha Pre-Release (v0.1.0-local-alpha)](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0)
+- **Status**: Pre-release (alpha). Expect unsigned SmartScreen prompts and manual updates.
+- **Usage**:
+  1. Download `ScannerAI.exe` from the release assets.
+  2. Place it in a folder of your choice (e.g., `C:\Programs\ScannerAI\`).
+  3. Double-click the executable and wait for your browser to open at `http://localhost:8501`.
+  4. Configure OCR providers and API keys via **Application Settings** (data is stored under `%APPDATA%\ScannerAI`).
+
+To build the executable yourself or customize the bundle, follow [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md).
+
 ## Dependencies
 
 See `requirements.txt` for detailed dependencies.
@@ -181,12 +210,14 @@ See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) – FAQ for installation, OCR, and hosting issues.
 - [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) – Building and distributing the Windows desktop launcher (local branches).
 
-## Branch Strategy
+## Branch Strategy (Mapped to Versions)
 
-- `main`: production build for the hosted Streamlit deployment.
-- `cloud-dev`: staging area for upcoming hosted features before they land on `main`.
-- `local-dev`: active Windows desktop development (launcher, installer, shutdown hooks).
-- `local-main`: stable branch for publishing Windows releases.
+- **Hosted (Streamlit Cloud)**
+  - `main`: production build for the hosted Streamlit deployment.
+  - `cloud-dev`: staging area for upcoming hosted features before they land on `main`.
+- **Local Desktop (Windows EXE)**
+  - `local-main`: stable branch for publishing Windows releases.
+  - `local-dev`: active Windows desktop development (launcher, installer, shutdown hooks).
 
 ### Pre-commit actions
 
