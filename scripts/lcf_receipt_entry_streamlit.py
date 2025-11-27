@@ -5,6 +5,8 @@ import inspect
 import json
 import os
 import re
+import threading
+import time
 from datetime import date, datetime
 from io import BytesIO
 from typing import Optional
@@ -15,6 +17,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from streamlit.runtime.scriptrunner import RerunException, RerunData
 
 from PIL import Image
@@ -37,6 +40,13 @@ OCR_MODEL_OPTIONS = {
     2: "GPT-4 Vision",
     3: "Gemini Vision",
 }
+
+_LOCAL_SHUTDOWN_STATE = {"port": None, "server": None}
+
+
+def is_local_launcher() -> bool:
+    """Return True when running inside the packaged/launcher build."""
+    return os.environ.get("SCANNERAI_LOCAL_LAUNCHER") == "1"
 
 def parse_float(value):
     """Utility to convert mixed-format numeric strings to float."""
@@ -702,6 +712,85 @@ def cancel_processing(reason: Optional[str] = None) -> bool:
     return True
 
 
+class _ShutdownRequestHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):  # noqa: A003
+        return  # Silence default HTTP server logging.
+
+    def _send_response(self, code: int) -> None:
+        self.send_response(code)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/shutdown":
+            self._send_response(204)
+            trigger_local_shutdown()
+        else:
+            self._send_response(404)
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.do_POST()
+
+
+def ensure_local_shutdown_listener() -> Optional[int]:
+    """Start the local shutdown listener (used by browser close hooks)."""
+    if not is_local_launcher():
+        return None
+    if _LOCAL_SHUTDOWN_STATE["port"]:
+        return _LOCAL_SHUTDOWN_STATE["port"]
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ShutdownRequestHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    _LOCAL_SHUTDOWN_STATE["server"] = server
+    _LOCAL_SHUTDOWN_STATE["port"] = port
+    return port
+
+
+def inject_browser_shutdown_hook() -> None:
+    """Inject JS that notifies the launcher when the browser tab closes."""
+    if not is_local_launcher():
+        return
+    if st.session_state.get("browser_shutdown_hook_installed"):
+        return
+
+    port = ensure_local_shutdown_listener()
+    if not port:
+        return
+
+    script = f"""
+    <script>
+    (function() {{
+        const endpoint = "http://127.0.0.1:{port}/shutdown";
+        const notify = () => {{
+            if (navigator.sendBeacon) {{
+                navigator.sendBeacon(endpoint, "");
+            }} else {{
+                fetch(endpoint, {{
+                    method: "POST",
+                    keepalive: true
+                }});
+            }}
+        }};
+        window.addEventListener("beforeunload", notify, {{ once: true }});
+    }})();
+    </script>
+    """
+    components.html(script, height=0)
+    st.session_state["browser_shutdown_hook_installed"] = True
+
+
+def trigger_local_shutdown(delay: float = 0.5) -> None:
+    """Schedule a local process shutdown after a short delay."""
+    def _shutdown():
+        time.sleep(max(delay, 0))
+        os._exit(0)
+
+    threading.Thread(target=_shutdown, daemon=True).start()
+
+
 def request_exit(message: Optional[str] = None) -> None:
     """Mark the current session for exit and stop further processing."""
     st.session_state.processing_queue = []
@@ -710,6 +799,7 @@ def request_exit(message: Optional[str] = None) -> None:
     st.session_state["exit_message"] = (
         message or "Session closed. You can safely close this tab."
     )
+    st.session_state["exit_should_shutdown"] = is_local_launcher()
 
 
 def initialize_session_state():
@@ -844,11 +934,15 @@ def main():
 
     if st.session_state.get("exit_requested"):
         st.info(st.session_state.get("exit_message", "Session closed. You can close this tab."))
+        if st.session_state.pop("exit_should_shutdown", False):
+            trigger_local_shutdown()
         st.stop()
 
     cancel_notice = st.session_state.pop("processing_cancelled_notice", None)
     if cancel_notice:
         st.warning(cancel_notice)
+
+    inject_browser_shutdown_hook()
 
     # Sidebar for file upload and navigation
     with st.sidebar:
