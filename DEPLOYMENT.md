@@ -1,22 +1,25 @@
 # Deployment Guide
 
+This guide covers **hosted deployments** (Streamlit Cloud) and **self-hosted** Streamlit servers. If you only need the packaged Windows desktop app, download it from the [local pre-release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0) or build it via [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md).
+
 ## Streamlit Cloud
 
 1. **Fork / push** the repository to your GitHub account.
 2. Visit [share.streamlit.io](https://share.streamlit.io) and select **New app**.
 3. Choose your repo, branch, and set the main file to `scripts/lcf_receipt_entry_streamlit.py`.
-4. Add the following files to the repo root (already present in this project):
+4. Use `main` for production deployments and `cloud-dev` when smoke-testing new hosted features.
+5. Add the following files to the repo root (already present in this project):
    - `requirements.txt`
    - `pyproject.toml`
    - `packages.txt` (installs system dependencies like `poppler-utils`, `libGL`, etc.)
-5. Set environment secrets (Settings → Secrets):
+6. Set environment secrets (Settings → Secrets):
    ```toml
    OPENAI_API_KEY="..."
    GEMINI_API_KEY="..."
    GOOGLE_CREDENTIALS_JSON="..."  # optional; use file uploader when possible
    ```
    > The hosted instance still supports uploading credentials via the sidebar; secrets only need to be set if you prefer environment variables.
-6. Deploy. Streamlit Cloud caches wheels, so the second deploy is significantly faster.
+7. Deploy. Streamlit Cloud caches wheels, so the second deploy is significantly faster.
 
 ### Common Issues
 
@@ -31,7 +34,7 @@
 
 ```bash
 git clone https://github.com/rijff24/receiptAI.git
-cd receipt_scanner
+cd receiptAI
 python -m venv scanner-venv
 scanner-venv\Scripts\activate  # or source scanner-venv/bin/activate
 pip install -r requirements.txt

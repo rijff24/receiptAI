@@ -4,7 +4,7 @@ ScannerAI ships with a built-in settings manager so you can configure the applic
 
 ## Quick Start
 
-1. Run `streamlit run scripts/lcf_receipt_entry_streamlit.py`.
+1. Run `streamlit run scripts/lcf_receipt_entry_streamlit.py` (or simply double-click `ScannerAI.exe` from the [local desktop pre-release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0)).
 2. Open the sidebar and expand **Application Settings**.
 3. Choose your OCR provider, toggle preprocessing/debug options, and set local file paths.
 4. Paste your OpenAI or Gemini API keys (they are encrypted locally).
