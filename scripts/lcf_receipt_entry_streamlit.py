@@ -718,6 +718,39 @@ def delete_receipt_at(index: int) -> None:
     st.session_state["receipt_deleted_notice"] = f"Deleted {display_name}."
 
 
+def handle_calculate_vat(receipt_index: int, vat_state_key: str) -> None:
+    """Callback to back-calculate VAT for a receipt."""
+    results = st.session_state.get("results", [])
+    if not results or receipt_index < 0 or receipt_index >= len(results):
+        return
+
+    receipt_data = results[receipt_index]["receipt_data"]
+    total_amount_value = parse_float(receipt_data.get("total_amount"))
+    app_settings = st.session_state.get("app_settings", {})
+    configured_rate = app_settings.get("vat_rate", 15.0)
+
+    notice_key = f"vat_calc_notice_{receipt_index}"
+
+    try:
+        configured_rate = float(configured_rate)
+    except (TypeError, ValueError):
+        configured_rate = 15.0
+
+    if total_amount_value is None or total_amount_value <= 0:
+        st.session_state[notice_key] = "Enter a valid total amount before calculating VAT."
+        return
+    if configured_rate <= 0:
+        st.session_state[notice_key] = "VAT rate must be greater than zero."
+        return
+
+    st.session_state.pop(notice_key, None)
+    vat_fraction = configured_rate / (100.0 + configured_rate)
+    computed_vat = round(total_amount_value * vat_fraction, 2)
+
+    st.session_state[vat_state_key] = computed_vat
+    receipt_data["vat_amount"] = computed_vat
+
+
 def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue, cancel_event):
     """Background worker to process receipts sequentially."""
     for entry in files_data:
@@ -1614,6 +1647,35 @@ def main():
                         let pendingSaveFrame = null;
 
                         const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+                        const computePreferredViewerHeight = () => {{
+                            const MIN_HEIGHT = 720;
+                            const MAX_HEIGHT = 1700;
+                            const FALLBACK = 1000;
+                            let parentViewport = null;
+                            try {{
+                                if (window.parent && window.parent !== window) {{
+                                    parentViewport = window.parent.innerHeight || null;
+                                }}
+                            }} catch (err) {{
+                                parentViewport = null;
+                            }}
+                            const base = parentViewport || window.innerHeight || FALLBACK;
+                            const adjusted = base ? base - 120 : FALLBACK;
+                            return clamp(Math.round(adjusted), MIN_HEIGHT, MAX_HEIGHT);
+                        }};
+
+                        const applyDefaultViewerHeight = () => {{
+                            if (viewer.dataset.defaultHeightApplied === "1") {{
+                                return;
+                            }}
+                            const desired = computePreferredViewerHeight();
+                            if (viewer.offsetHeight < desired) {{
+                                viewer.style.height = `${{desired}}px`;
+                            }}
+                            viewer.dataset.defaultHeightApplied = "1";
+                        }};
+                        applyDefaultViewerHeight();
+
                         const updateFrameHeight = () => {{
                             const extra = 200;
                             const target = Math.max(
@@ -1919,7 +1981,7 @@ def main():
                 </script>
                 """
 
-                components.html(viewer_html, height=620, width=None)
+                components.html(viewer_html, height=1000, width=None)
 
         with col2:
             st.subheader("Receipt Data")
@@ -1957,16 +2019,21 @@ def main():
             receipt_data["shop_name"] = new_shop_name
 
             # 2. Total Amount
-            new_total = st.text_input(
+            parsed_initial_total = parse_float(receipt_data.get("total_amount"))
+            if parsed_initial_total is None or parsed_initial_total < 0:
+                parsed_initial_total = 0.0
+            # Seed widget state before rendering so the first draw reflects stored data.
+            if total_key not in st.session_state:
+                st.session_state[total_key] = float(parsed_initial_total)
+
+            new_total = st.number_input(
                 "Total Amount",
-                value=format_currency_string(receipt_data.get("total_amount")),
+                min_value=0.0,
+                value=float(st.session_state[total_key]),
+                step=0.01,
                 key=total_key,
             )
-            parsed_total = parse_float(new_total)
-            if parsed_total is not None:
-                receipt_data["total_amount"] = f"{parsed_total:.2f}"
-            else:
-                receipt_data["total_amount"] = new_total.strip() or None
+            receipt_data["total_amount"] = f"{new_total:.2f}"
 
             # 3. VAT Amount
             current_vat = receipt_data.get("vat_amount", 0) or 0
@@ -1974,40 +2041,36 @@ def main():
                 current_vat_float = float(current_vat)
             except (TypeError, ValueError):
                 current_vat_float = 0.0
-            vat_cols = st.columns([3, 1])
+            vat_cols = st.columns([3, 2])
             with vat_cols[0]:
+                vat_value = st.session_state.setdefault(
+                    vat_key, float(current_vat_float)
+                )
                 new_vat = st.number_input(
                     "VAT Amount",
                     min_value=0.0,
-                    value=float(current_vat_float),
+                    value=vat_value,
                     step=0.01,
                     key=vat_key,
                 )
+                receipt_data["vat_amount"] = new_vat
             with vat_cols[1]:
-                if st.button(
+                # Add breathing room so the button is vertically aligned with the input field.
+                st.markdown("<div style='padding-top:11%'></div>", unsafe_allow_html=True)
+                st.button(
                     "Calculate VAT",
                     key=f"calculate_vat_{current_index}",
                     width="stretch",
                     help="Use the configured VAT rate to back-calculate VAT from the total amount.",
-                ):
-                    app_settings = st.session_state.get("app_settings", {})
-                    configured_rate = app_settings.get("vat_rate", 15.0)
-                    try:
-                        configured_rate = float(configured_rate)
-                    except (TypeError, ValueError):
-                        configured_rate = 15.0
-
-                    total_amount_value = parse_float(receipt_data.get("total_amount"))
-                    if total_amount_value is None or total_amount_value <= 0:
-                        st.warning("Enter a valid total amount before calculating VAT.")
-                    elif configured_rate <= 0:
-                        st.warning("VAT rate must be greater than zero.")
-                    else:
-                        vat_fraction = configured_rate / (100.0 + configured_rate)
-                        computed_vat = round(total_amount_value * vat_fraction, 2)
-                        st.session_state[vat_key] = computed_vat
-                        receipt_data["vat_amount"] = computed_vat
-                        st.success(f"VAT updated using {configured_rate:.2f}% rate.")
+                    on_click=handle_calculate_vat,
+                    kwargs={"receipt_index": current_index, "vat_state_key": vat_key},
+                )
+            vat_notice = st.session_state.pop(
+                f"vat_calc_notice_{current_index}", None
+            )
+            if vat_notice:
+                # Show the warning below the entire VAT control row for better visibility.
+                st.warning(vat_notice)
             receipt_data["vat_amount"] = round(new_vat, 2)
 
             # 4. Transaction Date
