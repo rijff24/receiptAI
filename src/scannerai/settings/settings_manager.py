@@ -108,6 +108,8 @@ class SettingsManager:
             "save_processed_image": False,
             "enable_price_count": False,
             "enable_item_capture": True,  # Default to enabled
+            "default_zoom": 0.5,
+            "vat_rate": 15.0,
             "classifier_model_path": default_classifier,
             "label_encoder_path": default_encoder,
             "tesseract_cmd_path": "",
