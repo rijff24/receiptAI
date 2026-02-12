@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import date, datetime
 from io import BytesIO
+from queue import Empty, Queue
 from typing import Optional
 
 
@@ -18,7 +19,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from streamlit.runtime.scriptrunner import RerunException, RerunData
+from streamlit.runtime.scriptrunner import RerunException, RerunData, add_script_run_ctx
 
 from PIL import Image
 
@@ -179,7 +180,7 @@ def render_settings_panel():
         import_triggered = st.button(
             "Import settings",
             key="import_settings_button",
-            use_container_width=True,
+            width="stretch",
         )
         if import_triggered:
             if import_settings_file is None:
@@ -248,6 +249,23 @@ def render_settings_panel():
             "Enable item capture and editing",
             value=snapshot.get("enable_item_capture", True),
             help="When enabled, you can view, add, edit, and delete individual items from receipts.",
+        )
+
+        default_zoom = st.slider(
+            "Default receipt zoom",
+            min_value=0.1,
+            max_value=2.0,
+            value=float(snapshot.get("default_zoom", 0.5) or 0.5),
+            step=0.05,
+            help="Sets the initial zoom level for the receipt viewer.",
+        )
+        vat_rate = st.number_input(
+            "Default VAT rate (%)",
+            min_value=0.0,
+            max_value=50.0,
+            value=float(snapshot.get("vat_rate", 15.0) or 15.0),
+            step=0.1,
+            help="Used by the Calculate VAT button. South Africa standard VAT is 15%.",
         )
 
         st.divider()
@@ -368,9 +386,7 @@ def render_settings_panel():
                 help="Provide a passphrase if you want to download an encrypted backup after saving.",
             )
 
-        save_settings = st.button(
-            "Save Settings", use_container_width=True
-        )
+        save_settings = st.button("Save Settings", width="stretch")
 
         if save_settings:
             validation_errors = []
@@ -407,6 +423,8 @@ def render_settings_panel():
                 "save_processed_image": save_processed_image,
                 "enable_price_count": enable_price_count,
                 "enable_item_capture": enable_item_capture,
+                "default_zoom": float(default_zoom),
+                "vat_rate": float(vat_rate),
                 "classifier_model_path": classifier_model_path.strip(),
                 "label_encoder_path": label_encoder_path.strip(),
                 "tesseract_cmd_path": tesseract_cmd_path.strip(),
@@ -474,13 +492,13 @@ def render_settings_panel():
                 data=export_blob,
                 file_name=SettingsManager.EXPORT_FILENAME,
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
         reset_clicked = st.button(
             "Reset settings to defaults",
             type="secondary",
-            use_container_width=True,
+            width="stretch",
         )
         if reset_clicked:
             defaults = settings_manager.get_defaults()
@@ -497,9 +515,10 @@ def render_settings_panel():
                 st.success("Settings restored to defaults.")
 
 
-def process_image(image_path, ocr_processor):
+def process_image(image_path, ocr_processor, app_settings=None):
     """Process a single receipt image."""
-    app_settings = st.session_state.get("app_settings", {})
+    if app_settings is None:
+        app_settings = st.session_state.get("app_settings", {})
     
     # Read the image
     if image_path.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -571,13 +590,15 @@ def process_image(image_path, ocr_processor):
     return {"image": original_image, "receipt_data": receipt_data}
 
 
-def process_file_bytes(file_name, file_bytes, ocr_processor):
+def process_file_bytes(file_name, file_bytes, ocr_processor, app_settings=None):
     """Process an in-memory file by writing it to a temporary location."""
-    temp_path = f"temp_{file_name}"
+    temp_suffix = abs(hash((file_name, time.time())))
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", file_name)
+    temp_path = f"temp_{temp_suffix}_{safe_name}"
     with open(temp_path, "wb") as temp_file:
         temp_file.write(file_bytes)
     try:
-        return process_image(temp_path, ocr_processor)
+        return process_image(temp_path, ocr_processor, app_settings=app_settings)
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -654,6 +675,257 @@ def autosave_results():
             st.warning(f"Autosave failed: {exc}")
 
 
+def delete_receipt_at(index: int) -> None:
+    """Remove a receipt from results and update related state."""
+    results = st.session_state.get("results", [])
+    if not results or index < 0 or index >= len(results):
+        return
+
+    removed = results.pop(index)
+    receipt_data = removed.get("receipt_data", {}) or {}
+    pathfile = receipt_data.get("receipt_pathfile")
+    file_name = removed.get("file_name")
+
+    identifiers = set()
+    if file_name:
+        identifiers.add(file_name)
+    if pathfile:
+        identifiers.add(pathfile)
+        identifiers.add(os.path.basename(pathfile))
+
+    display_name = file_name or (os.path.basename(pathfile) if pathfile else f"Receipt {index + 1}")
+
+    # Remove matching status entries
+    status_entries = st.session_state.get("receipt_status", [])
+    st.session_state.receipt_status = [
+        entry for entry in status_entries if entry.get("file") not in identifiers
+    ]
+
+    # Update process counts
+    counts = st.session_state.get("process_counts", {"completed": 0, "total": 0})
+    counts["total"] = max(counts.get("total", 0) - 1, 0)
+    counts["completed"] = min(counts.get("completed", 0), counts["total"])
+    st.session_state.process_counts = counts
+
+    # Adjust current index
+    remaining = len(results)
+    if remaining == 0:
+        st.session_state.current_index = 0
+    elif st.session_state.current_index >= remaining:
+        st.session_state.current_index = remaining - 1
+
+    autosave_results()
+    st.session_state["receipt_deleted_notice"] = f"Deleted {display_name}."
+
+
+def handle_calculate_vat(receipt_index: int, vat_state_key: str) -> None:
+    """Callback to back-calculate VAT for a receipt."""
+    results = st.session_state.get("results", [])
+    if not results or receipt_index < 0 or receipt_index >= len(results):
+        return
+
+    receipt_data = results[receipt_index]["receipt_data"]
+    total_amount_value = parse_float(receipt_data.get("total_amount"))
+    app_settings = st.session_state.get("app_settings", {})
+    configured_rate = app_settings.get("vat_rate", 15.0)
+
+    notice_key = f"vat_calc_notice_{receipt_index}"
+
+    try:
+        configured_rate = float(configured_rate)
+    except (TypeError, ValueError):
+        configured_rate = 15.0
+
+    if total_amount_value is None or total_amount_value <= 0:
+        st.session_state[notice_key] = "Enter a valid total amount before calculating VAT."
+        return
+    if configured_rate <= 0:
+        st.session_state[notice_key] = "VAT rate must be greater than zero."
+        return
+
+    st.session_state.pop(notice_key, None)
+    vat_fraction = configured_rate / (100.0 + configured_rate)
+    computed_vat = round(total_amount_value * vat_fraction, 2)
+
+    st.session_state[vat_state_key] = computed_vat
+    receipt_data["vat_amount"] = computed_vat
+
+
+def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue, cancel_event):
+    """Background worker to process receipts sequentially."""
+    for entry in files_data:
+        if cancel_event.is_set():
+            break
+
+        file_name = entry.get("name", "Receipt")
+        event_queue.put({"event": "status", "file": file_name, "status": "processing"})
+        try:
+            result = process_file_bytes(
+                file_name,
+                entry.get("data", b""),
+                ocr_processor,
+                app_settings=app_settings,
+            )
+        except Exception as exc:  # pragma: no cover
+            event_queue.put(
+                {
+                    "event": "error",
+                    "file": file_name,
+                    "error": str(exc),
+                    "data": entry.get("data", b""),
+                }
+            )
+        else:
+            if result:
+                result.setdefault("file_name", file_name)
+                if "receipt_data" in result:
+                    result["receipt_data"]["processing_status"] = "processed"
+                event_queue.put({"event": "result", "file": file_name, "result": result})
+            else:
+                event_queue.put(
+                    {
+                        "event": "error",
+                        "file": file_name,
+                        "error": "No data returned.",
+                        "data": entry.get("data", b""),
+                    }
+                )
+
+    if cancel_event.is_set():
+        event_queue.put({"event": "cancelled"})
+    event_queue.put({"event": "done"})
+
+
+def start_processing_thread(files_data):
+    """Spawn the processing worker thread and supporting structures."""
+    if not files_data:
+        return
+
+    existing_thread = st.session_state.get("processing_thread")
+    if existing_thread and existing_thread.is_alive():
+        return
+
+    event_queue = Queue()
+    cancel_event = threading.Event()
+
+    app_settings = json.loads(json.dumps(st.session_state.get("app_settings", {})))
+    ocr_processor = st.session_state.get("ocr_processor")
+
+    worker = threading.Thread(
+        target=process_receipts_worker,
+        args=(files_data, ocr_processor, app_settings, event_queue, cancel_event),
+        daemon=True,
+    )
+    add_script_run_ctx(worker)
+    worker.start()
+
+    st.session_state.processing_thread = worker
+    st.session_state.processing_event_queue = event_queue
+    st.session_state.processing_cancel_event = cancel_event
+
+
+def drain_processing_events():
+    """Apply pending processing events emitted by the worker."""
+    event_queue = st.session_state.get("processing_event_queue")
+    if not event_queue:
+        return
+
+    events_applied = False
+    while True:
+        try:
+            event = event_queue.get_nowait()
+        except Empty:
+            break
+
+        events_applied = True
+        event_type = event.get("event")
+        file_name = event.get("file")
+
+        if event_type == "status" and file_name:
+            update_receipt_status(file_name, event.get("status", "processing"))
+
+        elif event_type == "result" and file_name:
+            result = event.get("result")
+            if result:
+                st.session_state.results.append(result)
+                update_receipt_status(file_name, "processed")
+                st.session_state.processing_payloads.pop(file_name, None)
+                queue_list = st.session_state.get("processing_queue", [])
+                if file_name in queue_list:
+                    queue_list.remove(file_name)
+                counts = st.session_state.get("process_counts", {"completed": 0, "total": 0})
+                counts["completed"] = min(counts.get("completed", 0) + 1, counts.get("total", 0))
+                st.session_state.process_counts = counts
+                autosave_results()
+
+        elif event_type == "error" and file_name:
+            error_message = event.get("error", "Processing failed.")
+            update_receipt_status(file_name, "error", error_message)
+            st.session_state.processing_payloads.pop(file_name, None)
+            queue_list = st.session_state.get("processing_queue", [])
+            if file_name in queue_list:
+                queue_list.remove(file_name)
+            st.session_state.failed_receipts.append(
+                {
+                    "name": file_name,
+                    "data": event.get("data"),
+                    "error": error_message,
+                }
+            )
+            counts = st.session_state.get("process_counts", {"completed": 0, "total": 0})
+            counts["completed"] = min(counts.get("completed", 0) + 1, counts.get("total", 0))
+            st.session_state.process_counts = counts
+
+        elif event_type == "cancelled":
+            st.session_state["processing_cancelled_notice"] = "Processing cancelled. Partial results are available below."
+
+        elif event_type == "done":
+            st.session_state.processing_active = False
+            st.session_state.processing_thread = None
+            st.session_state.processing_cancel_event = None
+            st.session_state.processing_event_queue = None
+            if not st.session_state.get("processing_queue"):
+                st.session_state.processing_payloads = {}
+            if not st.session_state.get("processing_queue"):
+                st.session_state["processing_completed_notice"] = "Processing complete."
+
+    if events_applied:
+        update_process_counts()
+
+
+def render_processing_panel(placeholder):
+    """Render sidebar processing summary."""
+    counts = st.session_state.get("process_counts", {"completed": 0, "total": 0})
+    processing_active = st.session_state.get("processing_active", False)
+    queue = st.session_state.get("processing_queue", [])
+    receipt_status = st.session_state.get("receipt_status", [])
+    current_processing = next(
+        (entry["file"] for entry in receipt_status if entry.get("status") == "processing"),
+        None,
+    )
+
+    has_activity = processing_active or counts.get("total") or queue
+    if not has_activity:
+        placeholder.empty()
+        return
+
+    with placeholder.container():
+        st.subheader("Processing status")
+        total = max(counts.get("total", 0), 1)
+        completed = counts.get("completed", 0)
+        progress_ratio = min(max(completed / total, 0.0), 1.0)
+        st.progress(progress_ratio, text=f"Completed {completed} / {counts.get('total', 0)}")
+
+        if processing_active:
+            if current_processing:
+                st.write(f"Currently processing **{current_processing}**")
+            elif queue:
+                st.write(f"Currently processing **{queue[0]}**")
+            else:
+                st.write("Finishing up current receipt…")
+
+        if queue:
+            st.caption(f"{len(queue)} receipt(s) remaining in the queue.")
 def update_receipt_status(file_name, status, message=None):
     """Update or append the processing status for a receipt."""
     found = False
@@ -679,7 +951,9 @@ def update_process_counts():
     """Recompute completion counters based on receipt statuses."""
     total = st.session_state.process_counts.get("total", 0)
     completed = sum(
-        1 for entry in st.session_state.receipt_status if entry["status"] in {"processed", "skipped"}
+        1
+        for entry in st.session_state.receipt_status
+        if entry["status"] in {"processed", "skipped", "error"}
     )
     st.session_state.process_counts = {"completed": completed, "total": total}
 
@@ -689,18 +963,19 @@ def cancel_processing(reason: Optional[str] = None) -> bool:
     if not st.session_state.get("processing_active"):
         return False
     queue = st.session_state.get("processing_queue", [])
-    if not queue:
-        return False
+    cancel_event = st.session_state.get("processing_cancel_event")
+    if cancel_event:
+        cancel_event.set()
 
     skipped_count = len(queue)
     skip_message = "Cancelled by user"
-    for entry in queue:
-        file_name = entry.get("name", "Receipt")
+    for file_name in queue:
         update_receipt_status(file_name, "skipped", skip_message)
 
     st.session_state.processing_queue = []
     st.session_state.processing_active = False
-    autosave_results()
+    st.session_state.processing_thread = None
+    st.session_state.processing_cancel_event = None
 
     summary = reason or "Processing cancelled. Partial results are available below."
     summary_with_count = (
@@ -848,6 +1123,8 @@ def initialize_session_state():
         "google_credentials_path": resolve_setting(
             "google_credentials_path", config.google_credentials_path
         ),
+        "default_zoom": resolve_setting("default_zoom", 0.5),
+        "vat_rate": resolve_setting("vat_rate", 15.0),
     }
     st.session_state["app_settings"] = resolved_settings
 
@@ -874,6 +1151,14 @@ def initialize_session_state():
         st.session_state.processing_queue = []
     if "processing_active" not in st.session_state:
         st.session_state.processing_active = False
+    if "processing_thread" not in st.session_state:
+        st.session_state.processing_thread = None
+    if "processing_event_queue" not in st.session_state:
+        st.session_state.processing_event_queue = None
+    if "processing_cancel_event" not in st.session_state:
+        st.session_state.processing_cancel_event = None
+    if "processing_payloads" not in st.session_state:
+        st.session_state.processing_payloads = {}
     if "autosave_path" not in st.session_state:
         st.session_state.autosave_path = "receipt_autosave.json"
         
@@ -931,6 +1216,7 @@ def main():
 
     # Initialize session state
     initialize_session_state()
+    drain_processing_events()
 
     if st.session_state.get("exit_requested"):
         st.info(st.session_state.get("exit_message", "Session closed. You can close this tab."))
@@ -941,6 +1227,14 @@ def main():
     cancel_notice = st.session_state.pop("processing_cancelled_notice", None)
     if cancel_notice:
         st.warning(cancel_notice)
+
+    delete_notice = st.session_state.pop("receipt_deleted_notice", None)
+    if delete_notice:
+        st.success(delete_notice)
+
+    completed_notice = st.session_state.pop("processing_completed_notice", None)
+    if completed_notice:
+        st.success(completed_notice)
 
     inject_browser_shutdown_hook()
 
@@ -964,7 +1258,7 @@ def main():
             if st.button(
                 "Process Uploaded Files",
                 disabled=processing_active,
-                use_container_width=True,
+                width="stretch",
                 help="Start processing uploaded files" if not processing_active else "Processing in progress..."
             ):
                 files_data = [
@@ -976,13 +1270,19 @@ def main():
                 st.session_state.current_index = 0
                 st.session_state.receipt_status = []
                 st.session_state.failed_receipts = []
-                st.session_state.processing_queue = files_data
+                st.session_state.processing_queue = [file["name"] for file in files_data]
+                st.session_state.processing_payloads = {
+                    file["name"]: file["data"] for file in files_data
+                }
                 st.session_state.process_counts = {
                     "completed": 0,
                     "total": len(files_data),
                 }
                 st.session_state.processing_active = True
-                autosave_results()
+                st.session_state.processing_event_queue = None
+                st.session_state.processing_cancel_event = None
+                st.session_state.processing_thread = None
+                start_processing_thread(files_data)
                 force_rerun()
 
         # Home button - show when results exist and processing is complete
@@ -995,16 +1295,19 @@ def main():
             if st.button(
                 "Cancel Processing",
                 type="secondary",
-                use_container_width=True,
+                width="stretch",
                 help="Stop processing remaining receipts and keep partial results.",
             ):
                 if cancel_processing():
                     force_rerun()
 
+        processing_panel_placeholder = st.empty()
+        render_processing_panel(processing_panel_placeholder)
+
         # Show buttons when we have results and processing is not active (or queue is empty)
         processing_complete = not processing_active or (processing_queue_empty and has_results)
         if has_results and processing_complete:
-            if st.button("🏠 Home", use_container_width=True, help="Return to home screen and clear current results"):
+            if st.button("🏠 Home", width="stretch", help="Return to home screen and clear current results"):
                 st.session_state.results = []
                 st.session_state.current_index = 0
                 st.session_state.receipt_status = []
@@ -1019,7 +1322,7 @@ def main():
             st.divider()
         
         # Navigation with state preservation - show when results exist and processing is complete
-        if has_results and processing_complete:
+        if has_results:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Previous") and st.session_state.current_index > 0:
@@ -1128,65 +1431,8 @@ def main():
                 data=export_data,
                 file_name=f"receipt_data.{file_extension}",
                 mime=mime_type,
-                use_container_width=True,
+                width="stretch",
             )
-        if st.session_state.processing_active and st.session_state.processing_queue:
-            queue_entry = st.session_state.processing_queue[0]
-            counts = st.session_state.process_counts
-            total = max(counts["total"], 1)
-            completed = counts["completed"]
-            progress_ratio = completed / total
-            progress_text = (
-                f"Processing {queue_entry['name']} ({completed + 1}/{total})..."
-            )
-            progress_bar = st.progress(progress_ratio, text=progress_text)
-
-            update_receipt_status(queue_entry["name"], "processing")
-
-            try:
-                result = process_file_bytes(
-                    queue_entry["name"], queue_entry["data"], st.session_state.ocr_processor
-                )
-                if result:
-                    result["receipt_data"]["processing_status"] = "processed"
-                    st.session_state.results.append(result)
-                    update_receipt_status(queue_entry["name"], "processed")
-                else:
-                    update_receipt_status(queue_entry["name"], "error", "No data returned.")
-                    st.session_state.failed_receipts.append(
-                        {
-                            "name": queue_entry["name"],
-                            "data": queue_entry["data"],
-                            "error": "No data returned.",
-                        }
-                    )
-            except Exception as exc:  # pragma: no cover
-                update_receipt_status(queue_entry["name"], "error", str(exc))
-                st.session_state.failed_receipts.append(
-                    {
-                        "name": queue_entry["name"],
-                        "data": queue_entry["data"],
-                        "error": str(exc),
-                    }
-                )
-            finally:
-                autosave_results()
-                st.session_state.processing_queue.pop(0)
-
-            counts = st.session_state.process_counts
-            total = max(counts["total"], 1)
-            updated_ratio = counts["completed"] / total
-            status_text = f"Completed {counts['completed']} / {total}"
-            progress_bar.progress(updated_ratio, text=status_text)
-
-            if st.session_state.processing_queue:
-                force_rerun()
-            else:
-                st.session_state.processing_active = False
-                st.success("Processing complete.")
-                # Force rerun to update sidebar buttons immediately
-                st.rerun()
-
         # Only show "Completed */*" when processing is active or just completed (and on first image)
         counts = st.session_state.process_counts
         processing_active = st.session_state.get("processing_active", False)
@@ -1215,7 +1461,7 @@ def main():
         if st.button(
             "Exit Application",
             type="secondary",
-            use_container_width=True,
+            width="stretch",
             help="End this session and close the app.",
         ):
             request_exit()
@@ -1234,8 +1480,12 @@ def main():
             with cols[1]:
                 if st.button("Retry", key=f"retry_failed_{idx}"):
                     try:
+                        retry_settings = json.loads(json.dumps(st.session_state.get("app_settings", {})))
                         result = process_file_bytes(
-                            failed["name"], failed["data"], st.session_state.ocr_processor
+                            failed["name"],
+                            failed["data"],
+                            st.session_state.ocr_processor,
+                            app_settings=retry_settings,
                         )
                         if result:
                             result["receipt_data"]["processing_status"] = "processed"
@@ -1295,13 +1545,23 @@ def main():
                 zoom_out_id = f"zoom-out-{current_index}"
                 reset_id = f"zoom-reset-{current_index}"
                 zoom_info_id = f"zoom-info-{current_index}"
+                app_settings = st.session_state.get("app_settings", {})
+                try:
+                    initial_zoom = float(app_settings.get("default_zoom", 0.5))
+                except (TypeError, ValueError):
+                    initial_zoom = 0.5
+                initial_zoom = max(0.1, min(initial_zoom, 2.0))
+                initial_zoom_percent = int(round(initial_zoom * 100))
 
                 viewer_html = f"""
                 <style>
                     #{viewer_id} {{
                         width: 100%;
                         height: 600px;
-                        overflow: hidden;
+                        min-height: 300px;
+                        max-height: none;
+                        overflow: auto;
+                        resize: vertical;
                         border: 1px solid #d9d9d9;
                         border-radius: 6px;
                         background: #f7f7f7;
@@ -1357,7 +1617,7 @@ def main():
                         <button id="{zoom_out_id}" aria-label="Zoom out">−</button>
                         <button id="{reset_id}" aria-label="Reset zoom">⌂</button>
                     </div>
-                    <div id="{zoom_info_id}">50%</div>
+                    <div id="{zoom_info_id}">{initial_zoom_percent}%</div>
                 </div>
                 <script>
                     (function() {{
@@ -1371,7 +1631,8 @@ def main():
 
                         const MIN_SCALE = 0.2;
                         const MAX_SCALE = 5.0;
-                        let scale = 0.5;
+                        const INITIAL_SCALE = {initial_zoom};
+                        let scale = INITIAL_SCALE;
                         let offsetX = 0;
                         let offsetY = 0;
                         let isPanning = false;
@@ -1382,14 +1643,72 @@ def main():
                         const activeTouches = new Map();
                         let pinchStartDistance = null;
                         let pinchStartScale = null;
+                        const STORAGE_KEY = "receipt-viewer-state::{viewer_id}";
+                        let pendingSaveFrame = null;
 
                         const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+                        const computePreferredViewerHeight = () => {{
+                            const MIN_HEIGHT = 720;
+                            const MAX_HEIGHT = 1700;
+                            const FALLBACK = 1000;
+                            let parentViewport = null;
+                            try {{
+                                if (window.parent && window.parent !== window) {{
+                                    parentViewport = window.parent.innerHeight || null;
+                                }}
+                            }} catch (err) {{
+                                parentViewport = null;
+                            }}
+                            const base = parentViewport || window.innerHeight || FALLBACK;
+                            const adjusted = base ? base - 120 : FALLBACK;
+                            return clamp(Math.round(adjusted), MIN_HEIGHT, MAX_HEIGHT);
+                        }};
+
+                        const applyDefaultViewerHeight = () => {{
+                            if (viewer.dataset.defaultHeightApplied === "1") {{
+                                return;
+                            }}
+                            const desired = computePreferredViewerHeight();
+                            if (viewer.offsetHeight < desired) {{
+                                viewer.style.height = `${{desired}}px`;
+                            }}
+                            viewer.dataset.defaultHeightApplied = "1";
+                        }};
+                        applyDefaultViewerHeight();
+
+                        const updateFrameHeight = () => {{
+                            const extra = 200;
+                            const target = Math.max(
+                                document.documentElement.scrollHeight,
+                                viewer.offsetHeight + extra
+                            );
+                            const frame = window.frameElement;
+                            if (frame) {{
+                                frame.style.height = `${{target}}px`;
+                                const block = frame.closest('[data-testid="stVerticalBlock"]');
+                                if (block) {{
+                                    block.style.height = "auto";
+                                }}
+                                const parent = frame.parentElement;
+                                if (parent) {{
+                                    parent.style.height = "auto";
+                                }}
+                            }}
+                            if (window.parent && window.parent !== window) {{
+                                window.parent.postMessage({{ type: "streamlit:setFrameHeight", height: target }}, "*");
+                            }}
+                            if (window.Streamlit && Streamlit.setFrameHeight) {{
+                                Streamlit.setFrameHeight(target);
+                            }}
+                        }};
 
                         const applyTransform = () => {{
                             img.style.transform = `translate(${{offsetX}}px, ${{offsetY}}px) scale(${{scale}})`;
                             if (info) {{
                                 info.textContent = `${{Math.round(scale * 100)}}%`;
                             }}
+                            scheduleStateSave();
+                            updateFrameHeight();
                         }};
 
                         const setScale = (newScale, originX, originY) => {{
@@ -1415,6 +1734,54 @@ def main():
                             const extraY = rect.height - displayHeight;
                             offsetY = extraY > 0 ? extraY / 2 : 0;
                             applyTransform();
+                        }};
+
+                        const loadViewerPreferences = () => {{
+                            try {{
+                                const stored = sessionStorage.getItem(STORAGE_KEY);
+                                if (!stored) return false;
+                                const parsed = JSON.parse(stored);
+                                if (parsed && parsed.height) {{
+                                    viewer.style.height = `${{parsed.height}}px`;
+                                }}
+                                if (parsed && typeof parsed.scale === "number") {{
+                                    scale = clamp(parsed.scale, MIN_SCALE, MAX_SCALE);
+                                }}
+                                if (parsed && typeof parsed.offsetX === "number") {{
+                                    offsetX = parsed.offsetX;
+                                }}
+                                if (parsed && typeof parsed.offsetY === "number") {{
+                                    offsetY = parsed.offsetY;
+                                }}
+                                return true;
+                            }} catch (err) {{
+                                console.warn("Failed to load viewer state", err);
+                            }}
+                            return false;
+                        }};
+
+                        const saveViewerPreferences = () => {{
+                            try {{
+                                const payload = JSON.stringify({{
+                                    height: viewer.offsetHeight,
+                                    scale,
+                                    offsetX,
+                                    offsetY,
+                                }});
+                                sessionStorage.setItem(STORAGE_KEY, payload);
+                            }} catch (err) {{
+                                console.warn("Failed to save viewer state", err);
+                            }}
+                        }};
+
+                        const scheduleStateSave = () => {{
+                            if (pendingSaveFrame) {{
+                                return;
+                            }}
+                            pendingSaveFrame = requestAnimationFrame(() => {{
+                                pendingSaveFrame = null;
+                                saveViewerPreferences();
+                            }});
                         }};
 
                         const startPan = (clientX, clientY) => {{
@@ -1495,7 +1862,7 @@ def main():
 
                         resetBtn?.addEventListener("click", (event) => {{
                             event.preventDefault();
-                            scale = 0.5;
+                            scale = INITIAL_SCALE;
                             centerImage();
                         }});
 
@@ -1518,6 +1885,18 @@ def main():
                         window.addEventListener("mousemove", mouseMoveListener);
                         window.addEventListener("mouseup", mouseUpListener);
                         viewer.addEventListener("mouseleave", endPan);
+                        viewer.addEventListener("mouseup", () => {{
+                            requestAnimationFrame(() => {{
+                                saveViewerPreferences();
+                                updateFrameHeight();
+                            }});
+                        }});
+                        viewer.addEventListener("touchend", () => {{
+                            requestAnimationFrame(() => {{
+                                saveViewerPreferences();
+                                updateFrameHeight();
+                            }});
+                        }});
 
                         viewer.addEventListener("pointerdown", (event) => {{
                             if (!pointerIsTouch(event)) return;
@@ -1569,13 +1948,29 @@ def main():
                         viewer.addEventListener("pointercancel", releaseTouch);
 
                         const initialize = () => {{
-                            centerImage();
+                            const restored = loadViewerPreferences();
+                            if (restored) {{
+                                applyTransform();
+                            }} else {{
+                                centerImage();
+                            }}
+                            updateFrameHeight();
                         }};
 
                         if (img.complete) {{
                             initialize();
                         }} else {{
                             img.addEventListener("load", initialize, {{ once: true }});
+                        }}
+
+                        if (window.ResizeObserver) {{
+                            const ro = new ResizeObserver(() => {{
+                                saveViewerPreferences();
+                                updateFrameHeight();
+                            }});
+                            ro.observe(viewer);
+                        }} else {{
+                            setInterval(updateFrameHeight, 750);
                         }}
 
                         return () => {{
@@ -1586,13 +1981,25 @@ def main():
                 </script>
                 """
 
-                components.html(viewer_html, height=620, width=None)
+                components.html(viewer_html, height=1000, width=None)
 
         with col2:
             st.subheader("Receipt Data")
 
             # Shop details
             receipt_data = current_result["receipt_data"]
+
+            action_cols = st.columns([3, 1])
+            with action_cols[1]:
+                if st.button(
+                    "🗑 Delete Receipt",
+                    key=f"delete_receipt_{current_index}",
+                    type="secondary",
+                    width="stretch",
+                    help="Remove this receipt from the current session.",
+                ):
+                    delete_receipt_at(current_index)
+                    force_rerun()
 
             # Create unique keys for each input field
             shop_key = f"shop_name_{current_index}"
@@ -1612,16 +2019,21 @@ def main():
             receipt_data["shop_name"] = new_shop_name
 
             # 2. Total Amount
-            new_total = st.text_input(
+            parsed_initial_total = parse_float(receipt_data.get("total_amount"))
+            if parsed_initial_total is None or parsed_initial_total < 0:
+                parsed_initial_total = 0.0
+            # Seed widget state before rendering so the first draw reflects stored data.
+            if total_key not in st.session_state:
+                st.session_state[total_key] = float(parsed_initial_total)
+
+            new_total = st.number_input(
                 "Total Amount",
-                value=format_currency_string(receipt_data.get("total_amount")),
+                min_value=0.0,
+                value=float(st.session_state[total_key]),
+                step=0.01,
                 key=total_key,
             )
-            parsed_total = parse_float(new_total)
-            if parsed_total is not None:
-                receipt_data["total_amount"] = f"{parsed_total:.2f}"
-            else:
-                receipt_data["total_amount"] = new_total.strip() or None
+            receipt_data["total_amount"] = f"{new_total:.2f}"
 
             # 3. VAT Amount
             current_vat = receipt_data.get("vat_amount", 0) or 0
@@ -1629,13 +2041,36 @@ def main():
                 current_vat_float = float(current_vat)
             except (TypeError, ValueError):
                 current_vat_float = 0.0
-            new_vat = st.number_input(
-                "VAT Amount",
-                min_value=0.0,
-                value=float(current_vat_float),
-                step=0.01,
-                key=vat_key,
+            vat_cols = st.columns([3, 2])
+            with vat_cols[0]:
+                vat_value = st.session_state.setdefault(
+                    vat_key, float(current_vat_float)
+                )
+                new_vat = st.number_input(
+                    "VAT Amount",
+                    min_value=0.0,
+                    value=vat_value,
+                    step=0.01,
+                    key=vat_key,
+                )
+                receipt_data["vat_amount"] = new_vat
+            with vat_cols[1]:
+                # Add breathing room so the button is vertically aligned with the input field.
+                st.markdown("<div style='padding-top:11%'></div>", unsafe_allow_html=True)
+                st.button(
+                    "Calculate VAT",
+                    key=f"calculate_vat_{current_index}",
+                    width="stretch",
+                    help="Use the configured VAT rate to back-calculate VAT from the total amount.",
+                    on_click=handle_calculate_vat,
+                    kwargs={"receipt_index": current_index, "vat_state_key": vat_key},
+                )
+            vat_notice = st.session_state.pop(
+                f"vat_calc_notice_{current_index}", None
             )
+            if vat_notice:
+                # Show the warning below the entire VAT control row for better visibility.
+                st.warning(vat_notice)
             receipt_data["vat_amount"] = round(new_vat, 2)
 
             # 4. Transaction Date
@@ -1723,7 +2158,7 @@ def main():
                         })
                     
                     items_df = pd.DataFrame(items_data)
-                    st.dataframe(items_df, use_container_width=True, hide_index=False)
+                    st.dataframe(items_df, width="stretch", hide_index=False)
                     
                     # Delete item buttons
                     st.write("**Delete Items:**")
@@ -1731,7 +2166,11 @@ def main():
                     for idx, item in enumerate(items):
                         col_idx = idx % 5
                         with delete_cols[col_idx]:
-                            if st.button(f"Delete #{idx+1}", key=f"delete_item_{current_index}_{idx}", use_container_width=True):
+                            if st.button(
+                                f"Delete #{idx+1}",
+                                key=f"delete_item_{current_index}_{idx}",
+                                width="stretch",
+                            ):
                                 items.pop(idx)
                                 autosave_results()
                                 st.rerun()
@@ -1751,7 +2190,7 @@ def main():
                         new_item_coicop_desc = st.text_input("COICOP Description", key=f"new_item_coicop_desc_{current_index}")
                         new_item_confidence = st.text_input("Confidence", key=f"new_item_confidence_{current_index}", help="Optional: confidence score")
                     
-                    if st.button("Add Item", key=f"add_item_{current_index}", use_container_width=True):
+                    if st.button("Add Item", key=f"add_item_{current_index}", width="stretch"):
                         if new_item_name.strip():
                             new_item = {
                                 "item_name": new_item_name.strip(),
@@ -1773,6 +2212,9 @@ def main():
     else:
         st.info("Upload receipt images to begin processing")
         
+    if st.session_state.get("processing_active"):
+        time.sleep(0.5)
+        st.rerun()
         
 if __name__ == "__main__":
     main()
