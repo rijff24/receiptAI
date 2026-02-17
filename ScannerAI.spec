@@ -23,6 +23,17 @@ datas += copy_metadata('watchdog')
 tmp_ret = collect_all('scannerai')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# Explicit hidden imports for scannerai dependencies (not always traced by PyInstaller).
+# If the EXE raises ModuleNotFoundError at runtime, add the missing module here and rebuild.
+# See WINDOWS_INSTALL.md "Hidden imports" section for the full list and when to add new ones.
+hiddenimports += [
+    'dotenv',           # scannerai._config.config (python-dotenv)
+    'pdf2image',        # scannerai.utils.scanner_utils
+    'tiktoken',         # scannerai.utils.scanner_utils
+    'openai',           # scannerai.ocr (GPT-4 Vision, OpenAI OCR)
+    'pytesseract',      # scannerai.ocr.lcf_receipt_process_openai
+    'google.generativeai',  # scannerai.ocr.lcf_receipt_process_gemini
+]
 
 a = Analysis(
     ['launch_scannerai.py'],
