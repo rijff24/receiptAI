@@ -9,3 +9,5 @@ GEMINI_API_KEY_PATH=
 OPENAI_API_KEY_PATH="/absolute/path/to/openai_api_key.txt"
 GOOGLE_CREDENTIALS_PATH=
 TESSERACT_CMD_PATH="C:/Program Files/Tesseract-OCR/tesseract.exe"
+OPENAI_API_KEY=
+GEMINI_API_KEY=

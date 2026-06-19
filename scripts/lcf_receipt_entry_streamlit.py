@@ -28,6 +28,11 @@ os.environ.setdefault("SCANNERAI_HOSTED_MODE", "1")
 
 from scannerai._config.config import config
 from scannerai.settings import SettingsManager
+from scannerai.utils.export_utils import (
+    build_export_data,
+    build_export_zip,
+    missing_original_file_names,
+)
 from scannerai.utils.scanner_utils import merge_pdf_pages
 
 # Configure Streamlit page
@@ -390,21 +395,39 @@ def render_settings_panel():
 
         if save_settings:
             validation_errors = []
+            fallback_openai_available = bool(config.openai_api_key) or bool(
+                config.openai_api_key_path and os.path.exists(config.openai_api_key_path)
+            )
+            fallback_gemini_available = bool(config.gemini_api_key) or bool(
+                config.gemini_api_key_path and os.path.exists(config.gemini_api_key_path)
+            )
+            fallback_google_credentials_available = bool(
+                config.google_credentials_path and os.path.exists(config.google_credentials_path)
+            )
             if hosted_mode and not export_passphrase.strip():
                 validation_errors.append(
                     "Enter a passphrase so your settings can be encrypted for download."
                 )
-            if ocr_model in (1, 2) and not (openai_key_input.strip() or api_status.get("openai")):
+            if ocr_model in (1, 2) and not (
+                openai_key_input.strip()
+                or api_status.get("openai")
+                or fallback_openai_available
+            ):
                 validation_errors.append(
                     "An OpenAI API key is required for GPT-based OCR models."
                 )
             if ocr_model == 3:
-                if not (gemini_key_input.strip() or api_status.get("gemini")):
+                if not (
+                    gemini_key_input.strip()
+                    or api_status.get("gemini")
+                    or fallback_gemini_available
+                ):
                     validation_errors.append("A Gemini API key is required for Gemini OCR.")
                 if not (
                     google_credentials_upload
                     or google_credentials_path.strip()
                     or existing_google_credentials_path.strip()
+                    or fallback_google_credentials_available
                 ):
                     validation_errors.append(
                         "Google service-account credentials are required for Gemini OCR."
@@ -604,38 +627,63 @@ def process_file_bytes(file_name, file_bytes, ocr_processor, app_settings=None):
             os.remove(temp_path)
 
 
+def attach_original_upload(result, file_name, file_bytes):
+    """Attach original upload metadata needed for renamed ZIP exports."""
+    if not result:
+        return result
+    if isinstance(file_bytes, bytes):
+        payload = file_bytes
+    elif isinstance(file_bytes, bytearray):
+        payload = bytes(file_bytes)
+    else:
+        payload = b""
+
+    result["file_name"] = file_name
+    result["original_file_name"] = file_name
+    result["original_file_bytes"] = payload
+    return result
+
+
 def save_to_json(results, file_path):
     """Save results to JSON file."""
-    serializable_results = [
-        {
-            "receipt_data": {
-                **result["receipt_data"],
-                "transaction_date": format_date_for_storage(
-                    result["receipt_data"].get("transaction_date")
-                ),
-                "notes": result["receipt_data"].get("notes", ""),
-            }
+    serializable_results = []
+    for result in results:
+        receipt_data = {
+            **result["receipt_data"],
+            "transaction_date": format_date_for_storage(
+                result["receipt_data"].get("transaction_date")
+            ),
+            "notes": result["receipt_data"].get("notes", ""),
         }
-        for result in results
-    ]
+        receipt_data.pop("receipt_pathfile", None)
+        serializable_results.append(
+            {
+                "file_name": result.get("file_name", ""),
+                "receipt_data": receipt_data,
+            }
+        )
     with open(file_path, "w") as json_file:
         json.dump(serializable_results, json_file, indent=4)
+
 
 def save_to_csv(results, file_path):
     """Save results to CSV file."""
     rows = []
     for result in results:
         receipt_data = result["receipt_data"]
+        file_name = result.get("file_name") or os.path.basename(
+            receipt_data.get("receipt_pathfile", "")
+        )
         if not receipt_data["items"]:
             rows.append(
                 {
+                    "file_name": file_name,
                     "item": "",
                     "code": "",
                     "code_desc": "",
                     "price": "",
                     "prob": "",
                     "shop_name": receipt_data["shop_name"],
-                    "image_path": receipt_data.get("receipt_pathfile", ""),
                     "payment_mode": receipt_data.get("payment_mode", ""),
                     "total_amount": receipt_data.get("total_amount", ""),
                     "vat_amount": receipt_data.get("vat_amount", ""),
@@ -647,13 +695,13 @@ def save_to_csv(results, file_path):
             for item in receipt_data["items"]:
                 rows.append(
                     {
+                        "file_name": file_name,
                         "item": item.get("name", ""),
                         "code": item.get("code", ""),
                         "code_desc": item.get("code_desc", ""),
                         "price": item.get("price", ""),
                         "prob": item.get("prob", ""),
                         "shop_name": receipt_data["shop_name"],
-                        "image_path": receipt_data.get("receipt_pathfile", ""),
                         "payment_mode": receipt_data.get("payment_mode", ""),
                         "total_amount": receipt_data.get("total_amount", ""),
                         "vat_amount": receipt_data.get("vat_amount", ""),
@@ -673,6 +721,33 @@ def autosave_results():
             save_to_json(st.session_state.results, autosave_path)
         except OSError as exc:  # pragma: no cover
             st.warning(f"Autosave failed: {exc}")
+
+
+def clear_receipt_form_widget_state() -> None:
+    """Clear Streamlit widget state for receipt form fields so they refresh with new data after deletion."""
+    results = st.session_state.get("results", [])
+    max_index = len(results) + 15
+    prefixes = (
+        "shop_name_", "total_amount_", "vat_amount_", "transaction_date_",
+        "payment_mode_select_", "payment_mode_manual_", "notes_",
+        "vat_calc_notice_", "new_item_name_", "new_item_price_", "new_item_coicop_",
+        "new_item_coicop_desc_", "new_item_confidence_", "add_item_", "calculate_vat_",
+    )
+    to_remove = []
+    for key in list(st.session_state.keys()):
+        for prefix in prefixes:
+            if key.startswith(prefix):
+                suffix = key[len(prefix):]
+                parts = suffix.split("_")
+                if parts and parts[0].isdigit() and int(parts[0]) <= max_index:
+                    to_remove.append(key)
+                    break
+        if key.startswith("delete_item_"):
+            parts = key.split("_")
+            if len(parts) >= 4 and parts[2].isdigit() and int(parts[2]) <= max_index:
+                to_remove.append(key)
+    for k in to_remove:
+        st.session_state.pop(k, None)
 
 
 def delete_receipt_at(index: int) -> None:
@@ -714,6 +789,7 @@ def delete_receipt_at(index: int) -> None:
     elif st.session_state.current_index >= remaining:
         st.session_state.current_index = remaining - 1
 
+    clear_receipt_form_widget_state()
     autosave_results()
     st.session_state["receipt_deleted_notice"] = f"Deleted {display_name}."
 
@@ -751,6 +827,56 @@ def handle_calculate_vat(receipt_index: int, vat_state_key: str) -> None:
     receipt_data["vat_amount"] = computed_vat
 
 
+def sync_current_receipt_form_state() -> None:
+    """Sync current receipt form widgets into result data before export."""
+    results = st.session_state.get("results", [])
+    current_index = st.session_state.get("current_index", 0)
+    if not results or current_index < 0 or current_index >= len(results):
+        return
+
+    receipt_data = results[current_index].setdefault("receipt_data", {})
+
+    shop_key = f"shop_name_{current_index}"
+    total_key = f"total_amount_{current_index}"
+    vat_key = f"vat_amount_{current_index}"
+    date_key = f"transaction_date_{current_index}"
+    payment_select_key = f"payment_mode_select_{current_index}"
+    payment_manual_key = f"payment_mode_manual_{current_index}"
+    notes_key = f"notes_{current_index}"
+
+    if shop_key in st.session_state:
+        receipt_data["shop_name"] = st.session_state.get(shop_key)
+
+    if total_key in st.session_state:
+        total_value = parse_float(st.session_state.get(total_key))
+        receipt_data["total_amount"] = (
+            f"{total_value:.2f}" if total_value is not None else None
+        )
+
+    if vat_key in st.session_state:
+        vat_value = parse_float(st.session_state.get(vat_key))
+        receipt_data["vat_amount"] = round(vat_value, 2) if vat_value is not None else 0
+
+    if date_key in st.session_state:
+        date_value = str(st.session_state.get(date_key) or "").strip()
+        formatted_date = format_date_for_storage(date_value)
+        receipt_data["transaction_date"] = (
+            formatted_date if formatted_date else date_value or None
+        )
+
+    if payment_select_key in st.session_state:
+        selected_payment = st.session_state.get(payment_select_key)
+        if selected_payment == "Enter manually":
+            receipt_data["payment_mode"] = str(
+                st.session_state.get(payment_manual_key) or ""
+            ).strip()
+        else:
+            receipt_data["payment_mode"] = selected_payment
+
+    if notes_key in st.session_state:
+        receipt_data["notes"] = str(st.session_state.get(notes_key) or "").strip()
+
+
 def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue, cancel_event):
     """Background worker to process receipts sequentially."""
     for entry in files_data:
@@ -760,9 +886,10 @@ def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue
         file_name = entry.get("name", "Receipt")
         event_queue.put({"event": "status", "file": file_name, "status": "processing"})
         try:
+            file_bytes = entry.get("data", b"")
             result = process_file_bytes(
                 file_name,
-                entry.get("data", b""),
+                file_bytes,
                 ocr_processor,
                 app_settings=app_settings,
             )
@@ -777,7 +904,7 @@ def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue
             )
         else:
             if result:
-                result.setdefault("file_name", file_name)
+                attach_original_upload(result, file_name, file_bytes)
                 if "receipt_data" in result:
                     result["receipt_data"]["processing_status"] = "processed"
                 event_queue.put({"event": "result", "file": file_name, "result": result})
@@ -1128,12 +1255,13 @@ def initialize_session_state():
     }
     st.session_state["app_settings"] = resolved_settings
 
-    openai_api_key = (
-        settings_manager.get_api_key("openai") if settings_manager else config.openai_api_key
-    )
-    gemini_api_key = (
-        settings_manager.get_api_key("gemini") if settings_manager else config.gemini_api_key
-    )
+    openai_api_key = settings_manager.get_api_key("openai") if settings_manager else None
+    if not openai_api_key:
+        openai_api_key = config.openai_api_key
+
+    gemini_api_key = settings_manager.get_api_key("gemini") if settings_manager else None
+    if not gemini_api_key:
+        gemini_api_key = config.gemini_api_key
 
     if "results" not in st.session_state:
         print('Initialise st.session_state.results = []')
@@ -1344,93 +1472,37 @@ def main():
             snapshot = settings_manager.get_settings_snapshot()
             enable_item_capture = snapshot.get("enable_item_capture", True)
 
-            # Prepare export data
-            if export_format == "JSON":
-                import json
-                serializable_results = []
-                for result in st.session_state.results:
-                    receipt_data = result["receipt_data"].copy()
-                    
-                    # Build export data with all fields
-                    export_receipt_data = {
-                        "shop_name": receipt_data.get("shop_name"),
-                        "total_amount": receipt_data.get("total_amount"),
-                        "vat_amount": receipt_data.get("vat_amount", 0),
-                        "payment_mode": receipt_data.get("payment_mode"),
-                        "transaction_date": format_date_for_storage(
-                            receipt_data.get("transaction_date")
-                        ),
-                        "notes": receipt_data.get("notes", ""),
-                        "receipt_pathfile": receipt_data.get("receipt_pathfile", ""),
-                    }
-                    
-                    # Only include items if item capture is enabled
-                    if enable_item_capture and "items" in receipt_data:
-                        export_receipt_data["items"] = receipt_data["items"]
-                    
-                    serializable_results.append({
-                        "receipt_data": export_receipt_data,
-                        "file_name": result.get("file_name") or os.path.basename(receipt_data.get("receipt_pathfile", "")),
-                    })
-                
-                export_data = json.dumps(serializable_results, indent=4, ensure_ascii=False)
-                mime_type = "application/json"
-                file_extension = "json"
-            else:  # CSV
-                rows = []
-                for result in st.session_state.results:
-                    receipt_data = result["receipt_data"]
-                    file_name = result.get("file_name") or os.path.basename(receipt_data.get("receipt_pathfile", ""))
-                    
-                    # Base fields that are always included
-                    base_row = {
-                        "file_name": file_name,
-                        "shop_name": receipt_data.get("shop_name", ""),
-                        "total_amount": receipt_data.get("total_amount", ""),
-                        "vat_amount": receipt_data.get("vat_amount", ""),
-                        "payment_mode": receipt_data.get("payment_mode", ""),
-                        "transaction_date": receipt_data.get("transaction_date", ""),
-                        "notes": receipt_data.get("notes", ""),
-                        "receipt_pathfile": receipt_data.get("receipt_pathfile", ""),
-                    }
-                    
-                    # Include items only if item capture is enabled
-                    if enable_item_capture and receipt_data.get("items"):
-                        for item in receipt_data["items"]:
-                            row = base_row.copy()
-                            row.update({
-                                "item": item.get("item_name", item.get("name", "")),
-                                "code": item.get("coicop", item.get("code", "")),
-                                "code_desc": item.get("coicop_desc", item.get("code_desc", "")),
-                                "price": item.get("price", ""),
-                                "prob": item.get("confidence", item.get("prob", "")),
-                            })
-                            rows.append(row)
-                    elif enable_item_capture:
-                        # Item capture enabled but no items - add empty item columns
-                        base_row.update({
-                            "item": "",
-                            "code": "",
-                            "code_desc": "",
-                            "price": "",
-                            "prob": "",
-                        })
-                        rows.append(base_row)
-                    else:
-                        # Items disabled - just include base fields (no item columns)
-                        rows.append(base_row)
-                
-                df = pd.DataFrame(rows)
-                export_data = df.to_csv(index=False)
-                mime_type = "text/csv"
-                file_extension = "csv"
+            sync_current_receipt_form_state()
+            export_date = date.today()
+            data_filename, _, file_plan = build_export_data(
+                st.session_state.results,
+                export_format,
+                enable_item_capture,
+                export_date=export_date,
+            )
+            missing_files = missing_original_file_names(file_plan)
+            if missing_files:
+                st.warning(
+                    "Some original upload bytes are unavailable, so those receipt "
+                    "files will be missing from the ZIP: "
+                    + ", ".join(missing_files)
+                )
 
-            # Download button
+            zip_data = build_export_zip(
+                st.session_state.results,
+                export_format,
+                enable_item_capture,
+                export_date=export_date,
+            )
+            included_file_count = len(file_plan) - len(missing_files)
+            st.caption(
+                f"ZIP includes {data_filename} and {included_file_count} renamed receipt file(s)."
+            )
             st.download_button(
-                label=f"Download {export_format}",
-                data=export_data,
-                file_name=f"receipt_data.{file_extension}",
-                mime=mime_type,
+                label=f"Download {export_format} ZIP",
+                data=zip_data,
+                file_name=f"receipt_export_{export_date.strftime('%Y%m%d')}.zip",
+                mime="application/zip",
                 width="stretch",
             )
         # Only show "Completed */*" when processing is active or just completed (and on first image)
@@ -1446,8 +1518,30 @@ def main():
             )
 
         if st.session_state.receipt_status:
+            status_entries = st.session_state.receipt_status
+            current_processing_file = next(
+                (e["file"] for e in status_entries if e.get("status") == "processing"),
+                None,
+            )
+            ordered = (
+                [e for e in status_entries if e["file"] == current_processing_file]
+                + [e for e in status_entries if e["file"] != current_processing_file]
+            ) if current_processing_file else list(status_entries)
+
+            per_page = 8
+            total = len(ordered)
+            num_pages = max(1, (total + per_page - 1) // per_page)
+            page_key = "processing_status_page"
+            if page_key not in st.session_state:
+                st.session_state[page_key] = 0
+            if current_processing_file:
+                st.session_state[page_key] = 0
+            page = min(st.session_state[page_key], num_pages - 1)
+            start = page * per_page
+            page_entries = ordered[start : start + per_page]
+
             st.write("Processing status:")
-            for entry in st.session_state.receipt_status:
+            for entry in page_entries:
                 status = entry["status"]
                 file_name = entry["file"]
                 message = entry.get("message")
@@ -1456,6 +1550,18 @@ def main():
                 if message and status not in {"processed", "skipped"}:
                     text += f" ({message})"
                 st.write(text)
+
+            if num_pages > 1:
+                st.caption(f"Page {page + 1} of {num_pages} ({total} total)")
+                pcols = st.columns(2)
+                with pcols[0]:
+                    if st.button("← Prev", key="processing_status_prev") and page > 0:
+                        st.session_state[page_key] = page - 1
+                        st.rerun()
+                with pcols[1]:
+                    if st.button("Next →", key="processing_status_next") and page < num_pages - 1:
+                        st.session_state[page_key] = page + 1
+                        st.rerun()
 
         st.divider()
         if st.button(
@@ -1488,6 +1594,11 @@ def main():
                             app_settings=retry_settings,
                         )
                         if result:
+                            attach_original_upload(
+                                result,
+                                failed["name"],
+                                failed.get("data", b""),
+                            )
                             result["receipt_data"]["processing_status"] = "processed"
                             st.session_state.results.append(result)
                             update_receipt_status(failed["name"], "processed")
@@ -1517,6 +1628,9 @@ def main():
                             "receipt_pathfile": failed["name"],
                             "processing_status": "skipped",
                         },
+                        "file_name": failed["name"],
+                        "original_file_name": failed["name"],
+                        "original_file_bytes": failed.get("data", b""),
                     }
                     st.session_state.results.append(placeholder)
                     update_receipt_status(failed["name"], "skipped", "Marked as skipped by user.")
@@ -1724,7 +1838,7 @@ def main():
                             applyTransform();
                         }};
 
-                        const centerImage = () => {{
+                        const centerImageHorizontalOnly = () => {{
                             const rect = viewer.getBoundingClientRect();
                             const naturalWidth = img.naturalWidth || rect.width;
                             const naturalHeight = img.naturalHeight || rect.height;
@@ -1863,7 +1977,7 @@ def main():
                         resetBtn?.addEventListener("click", (event) => {{
                             event.preventDefault();
                             scale = INITIAL_SCALE;
-                            centerImage();
+                            centerImageHorizontalOnly();
                         }});
 
                         viewer.addEventListener("wheel", handleWheel, {{ passive: false }});
@@ -1952,7 +2066,7 @@ def main():
                             if (restored) {{
                                 applyTransform();
                             }} else {{
-                                centerImage();
+                                centerImageHorizontalOnly();
                             }}
                             updateFrameHeight();
                         }};

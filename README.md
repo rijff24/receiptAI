@@ -1,13 +1,13 @@
 # ScannerAI - Receipt Scanner and Classifier
 ScannerAI is a Python application that processes retail receipts using computer vision and AI to extract, classify and analyze receipt data. It features a graphical user interface for viewing and editing receipt information with support for COICOP (Classification of Individual Consumption According to Purchase) code classification.
 
-## Two Versions (and Branches)
-ScannerAI ships in two deployment flavors that share the same codebase and Streamlit UI:
+## Deployment Modes and Branches
+ScannerAI ships in two deployment modes that share the same Streamlit UI:
 
-- **Web Hosted Version** – Runs on Streamlit Cloud at [receiptai.streamlit.app](https://receiptai.streamlit.app/). Production lives on the `main` branch and new hosted features incubate on `cloud-dev`.
-- **Local Desktop Version** – A Windows executable (`ScannerAI.exe`) that launches Streamlit locally via the built-in launcher. Production releases live on `local-main` and ongoing desktop work happens on `local-dev`.
+- **Web Hosted Version** – Runs on Streamlit Cloud at [receiptai.streamlit.app](https://receiptai.streamlit.app/). The public app follows the `main` branch.
+- **Local Desktop Version** – A Windows executable (`ScannerAI.exe`) that launches Streamlit locally via `launch_scannerai.py`.
 
-The remainder of this document calls out when instructions differ between the hosted and local experiences.
+This checkout currently uses `main` for hosted production and `dev` for active integration work. The Windows launcher and PyInstaller spec live in the same repo and are released from tagged builds.
 
 ## Features
 
@@ -17,9 +17,10 @@ The remainder of this document calls out when instructions differ between the ho
 - **Multiple OCR Options**: Support for multiple OCR models including Gemini and OpenAI
 - **Batch Processing**: Process multiple receipts from a folder
 - **In-App Settings**: Configure OCR providers, API keys, and local paths directly from the UI
-- **Export Options**: Save processed data in JSON or CSV formats
+- **Export Options**: Download a ZIP containing JSON/CSV data plus renamed original receipt uploads
 - **Progress Tracking**: Visual progress tracking for batch operations
-- **Processing Controls**: Cancel long-running batches or exit the session safely
+- **Processing Controls**: Cancel long-running batches, retry or skip failed receipts, delete receipts from the current session, and exit safely
+- **Review Tools**: Edit VAT, payment mode, transaction date, notes, and item rows; calculate VAT from the configured rate
 
 ## Hosted Application (Streamlit Cloud)
 
@@ -47,15 +48,15 @@ git clone https://github.com/rijff24/receiptAI.git
 cd receiptAI
 ```
 
-**2. Set up virtual environment**
+**2. Set up virtual environment and dependencies**
 
 You are strongly recommended to install resources into a virtual environment.
 
 ``` bash
 python -m venv scanner-venv
-source scanner-venv/bin/activate # source scanner-venv/Scripts/activate on Windows
-python -m pip install --upgrade pip
-python -m pip install .
+source scanner-venv/bin/activate # PowerShell: .\scanner-venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
 ```
 
 > \[!NOTE\] If you intend doing any development work, please install the package as editable and with the `dev` optional dependencies:
@@ -66,16 +67,7 @@ python -m pip install .
 >
 > Moreover, once you have installed the package, please install the pre-commit hooks. These hooks help us to ensure repository security and a consistent code style.
 
-
-
-
-**3. Install the required dependencies**
-``` bash
-pip install -r requirements.txt
-```
-
-
-**4. Configure ScannerAI**
+**3. Configure ScannerAI**
 
 > [!TIP]
 > The recommended way to configure ScannerAI is *inside the app*. Launch Streamlit, open the sidebar, and expand **Application Settings**. You can pick the OCR provider, toggle preprocessing, and paste API keys without touching any files. Everything is stored locally and encrypted—see [`SETTINGS.md`](SETTINGS.md) for details.
@@ -84,6 +76,7 @@ pip install -r requirements.txt
 - Uploaded Google service-account JSON files are saved alongside the settings and never leave your device.
 - Hosting centrally? Set `SCANNERAI_HOSTED_MODE=1` and follow the export/import workflow described in [`SETTINGS.md`](SETTINGS.md) so credentials stay on each user’s machine.
 - Want the packaged Windows EXE? Download the [local desktop pre-release](#download-the-local-desktop-pre-release) or build it yourself via [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md).
+- Running from source and want persistent local settings? Set `SCANNERAI_HOSTED_MODE=0` before starting Streamlit. On the `main` branch, the Streamlit script defaults to hosted mode unless this variable is set.
 
 **Headless / legacy configuration**
 
@@ -101,6 +94,8 @@ GEMINI_API_KEY_PATH=/absolute/path/to/gemini.key
 OPENAI_API_KEY_PATH=/absolute/path/to/openai.key
 GOOGLE_CREDENTIALS_PATH=/absolute/path/to/google-credentials.json
 TESSERACT_CMD_PATH=/absolute/path/to/tesseract.exe
+OPENAI_API_KEY=optional-direct-key
+GEMINI_API_KEY=optional-direct-key
 ```
 
 These keys mirror the UI toggles:
@@ -109,6 +104,7 @@ These keys mirror the UI toggles:
 - `OCR_MODEL`: `1` = Tesseract + GPT‑3.5, `2` = GPT‑4 Vision, `3` = Gemini Vision
 - `CLASSIFIER_MODEL_PATH` / `LABEL_ENCODER_PATH`: optional paths to trained COICOP models
 - `GEMINI_API_KEY_PATH`, `OPENAI_API_KEY_PATH`, `GOOGLE_CREDENTIALS_PATH`, `TESSERACT_CMD_PATH`: filesystem fallbacks when you cannot use in-app secrets storage
+- `OPENAI_API_KEY`, `GEMINI_API_KEY`: direct environment/config-file fallbacks for non-UI or centrally managed runs
 
 ## API Keys
 
@@ -117,7 +113,7 @@ The application requires API keys for OCR services:
 - OpenAI API key (only if you select the GPT-based OCR models)
 - Google Cloud service-account credentials (only for Gemini)
 
-Use the **Application Settings** panel to paste keys directly—ScannerAI encrypts them with `cryptography.Fernet` and stores them locally. For headless deployments, provide file paths in `config.txt` as shown above. Never commit your keys to Git.
+Use the **Application Settings** panel to paste keys directly—ScannerAI encrypts them with `cryptography.Fernet` and stores them locally. For headless deployments, provide file paths or direct API-key environment variables in `config.txt` as shown above. Never commit your keys to Git.
 
 ## Trained Model
 We put a trained model as an example in src/scannerai/classifiers/trainedModels/, where you can set LRCountVectorizer.sav for CLASSIFIER_MODEL_PATH and encoder.pkl for LABEL_ENCODER_PATH.
@@ -129,6 +125,7 @@ The above model is trained based on Logistic Regression (LR) using a popular fea
 ### Starting the Application
 
 ``` bash
+$env:SCANNERAI_HOSTED_MODE="0"   # PowerShell; omit this for hosted/stateless mode
 streamlit run scripts/lcf_receipt_entry_streamlit.py
 ```
 
@@ -138,10 +135,11 @@ streamlit run scripts/lcf_receipt_entry_streamlit.py
 
 1. Click "Browse files" to select receipt images/PDFs
 2. Click "Process Uploaded Files" to process the files
-3. Edit shop name, total amount, payment mode and items including item name, price, or COICOP if needed
-4. Add/delete items to the receipt if needed
-5. Navigate between receipts using Previous/Next buttons
-6. Save processed data in JSON or CSV format
+3. Monitor the paged processing status; retry or skip failed receipts if needed
+4. Edit shop name, total amount, VAT, payment mode, transaction date, notes, and items
+5. Add/delete items or delete the current receipt from the session if needed
+6. Navigate between receipts using Previous/Next buttons
+7. Download a ZIP containing the selected JSON/CSV export and renamed receipt files
 
 ### Process a single receipt
 Here is an example using Google's Gemini model to take image or pdf as input and output a dictionary of shop name, items and their prices, total amount and payment methods.
@@ -161,13 +159,13 @@ print(json.dumps(result, indent=2))
 ## Project Structure
 
 - `scripts/lcf_receipt_entry_streamlit.py`: Main Streamlit UI (uploads, navigation, editing, export)
-- `scannerai/ocr/`: OCR processors (Gemini Vision, GPT-4o mini, Tesseract + GPT-3.5)
-- `scannerai/classifiers/`: COICOP classification utilities and trained models
-- `scannerai/settings/`: Settings manager with encryption + keyring integration
-- `scannerai/_config/`: Legacy/headless configuration helpers
-- `scannerai/utils/`: Shared helpers (PDF merging, token counting, etc.)
-- `scannerai/settings/settings_manager.py`: Entry point for all settings and secure storage logic
-- `launch_scannerai.py`: Windows launcher script used by the packaged build (local branches)
+- `src/scannerai/ocr/`: OCR processors (Gemini Vision, GPT-4 Vision via GPT-4o mini, Tesseract + GPT-3.5)
+- `src/scannerai/classifiers/`: COICOP classification utilities and trained models
+- `src/scannerai/settings/`: Settings manager with encryption + keyring integration
+- `src/scannerai/_config/`: Legacy/headless configuration helpers
+- `src/scannerai/utils/`: Shared helpers (PDF merging, token counting, etc.)
+- `src/scannerai/settings/settings_manager.py`: Entry point for all settings and secure storage logic
+- `launch_scannerai.py`: Windows launcher script used by the packaged build
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for an in-depth developer-oriented walkthrough.
 
@@ -194,7 +192,7 @@ See `requirements.txt` for detailed dependencies.
 ScannerAI now ships with an in-app settings manager. Launch the Streamlit UI, expand **Application Settings** in the sidebar, and adjust:
 
 - OCR provider (Tesseract + GPT‑3.5, GPT‑4 Vision, Gemini Vision)
-- Debug/preprocessing toggles and pricing estimators
+- Debug/preprocessing toggles, item capture, default zoom, VAT rate, and pricing estimators
 - Local paths for classifier artifacts, Tesseract, and Google credentials
 - OpenAI / Gemini API keys (stored encrypted on your machine)
 
@@ -208,34 +206,23 @@ See [`SETTINGS.md`](SETTINGS.md) for screenshots, storage locations, and manual-
 - [`SECURITY.md`](SECURITY.md) – Responsible disclosure process and hardening tips.
 - [`SETTINGS.md`](SETTINGS.md) – UI walkthrough for configuring OCR providers, paths, and API keys.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) – FAQ for installation, OCR, and hosting issues.
-- [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) – Building and distributing the Windows desktop launcher (local branches).
+- [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md) – Building and distributing the Windows desktop launcher.
 
-## Branch Strategy (Mapped to Versions)
+## Branch Strategy
 
-- **Hosted (Streamlit Cloud)**
-  - `main`: production build for the hosted Streamlit deployment.
-  - `cloud-dev`: staging area for upcoming hosted features before they land on `main`.
-- **Local Desktop (Windows EXE)**
-  - `local-main`: stable branch for publishing Windows releases.
-  - `local-dev`: active Windows desktop development (launcher, installer, shutdown hooks).
+- `main`: production branch for the hosted Streamlit deployment and tagged local desktop builds.
+- `dev`: integration branch for upcoming hosted and desktop changes before they land on `main`.
 
 ### Pre-commit actions
 
-This repository contains a configuration of pre-commit hooks. These are language agnostic and focussed on repository security (such as detection of passwords and API keys). If approaching this project as a developer, you are encouraged to install and enable `pre-commits` by running the following in your shell: 1. Install `pre-commit`:
+This repository contains pre-commit hooks focused on repository security, including checks for passwords, API keys, large files, and unresolved merge conflict headers. To enable them:
 
-````
-  ```
-  pip install pre-commit
-  ```
-````
+```bash
+pip install pre-commit
+pre-commit install
+```
 
-2.  Enable `pre-commit`:
-
-    ```
-    pre-commit install
-    ```
-
-    Once pre-commits are activated, whenever you commit to this repository a series of checks will be executed. The pre-commits include checking for security keys, large files and unresolved merge conflict headers. The use of active pre-commits are highly encouraged and the given hooks can be expanded with Python or R specific hooks that can automate the code style and linting. For example, the `flake8` and `black` hooks are useful for maintaining consistent Python code formatting.
+The hook set can be expanded with Python-specific checks such as `ruff` or `black` when needed.
 
 **NOTE:** Pre-commit hooks execute Python, so it expects a working Python build.
 

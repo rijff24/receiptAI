@@ -12,7 +12,7 @@
 
 - **Windows SmartScreen warning** – The alpha build is unsigned. Click **More info → Run anyway** if you trust the binary from the [official release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0).
 - **Long first launch** – PyInstaller extracts dependencies on first run; subsequent launches are faster. Keep the console window open until the browser loads `http://localhost:8501`.
-- **Settings not persisting** – The launcher sets `SCANNERAI_HOSTED_MODE=0`, so settings live under `%APPDATA%\ScannerAI`. Ensure that directory is writable and refer to `SETTINGS.md`.
+- **Settings not persisting** – The Windows launcher sets `SCANNERAI_HOSTED_MODE=0`, so settings live under `%APPDATA%\ScannerAI`. If you run `streamlit run scripts/lcf_receipt_entry_streamlit.py` from source, set `SCANNERAI_HOSTED_MODE=0` yourself; otherwise the `main` branch defaults to hosted/session-only mode.
 
 ## Settings & API Keys
 
@@ -22,7 +22,7 @@
 
 ## OCR Providers
 
-- **Gemini** – Requires Google service-account JSON and Gemini API key. Make sure `GOOGLE_APPLICATION_CREDENTIALS` points to the JSON or upload via UI.
+- **Gemini** – Requires Google service-account JSON and Gemini API key. Set `GOOGLE_CREDENTIALS_PATH`, enter the path in **Application Settings**, or upload the JSON via the local-mode UI.
 - **GPT-4 Vision** – Needs OpenAI API key with vision access.
 - **Tesseract + GPT-3.5** – Install Tesseract locally and set `tesseract_cmd_path`.
 

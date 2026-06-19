@@ -17,7 +17,7 @@ We will acknowledge receipt within 3 working days and keep you informed of progr
 ## Handling Sensitive Data
 
 - Never commit API keys, access tokens, or personal receipt data.
-- Use the in-app settings to store encrypted credentials locally.
+- Use the in-app settings for credentials: local mode stores encrypted keys under the user profile, and hosted mode keeps keys session-only unless the user exports an encrypted settings file.
 - When filing issues, redact file paths or contents that might expose private information.
 
 ## Hardening Checklist for Contributors

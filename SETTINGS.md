@@ -4,13 +4,15 @@ ScannerAI ships with a built-in settings manager so you can configure the applic
 
 ## Quick Start
 
-1. Run `streamlit run scripts/lcf_receipt_entry_streamlit.py` (or simply double-click `ScannerAI.exe` from the [local desktop pre-release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0)).
+1. For persistent local settings, set `SCANNERAI_HOSTED_MODE=0` and run `streamlit run scripts/lcf_receipt_entry_streamlit.py` (or simply double-click `ScannerAI.exe` from the [local desktop pre-release](https://github.com/rijff24/receiptAI/releases/tag/Alpha0.1.0)).
 2. Open the sidebar and expand **Application Settings**.
 3. Choose your OCR provider, toggle preprocessing/debug options, and set local file paths.
 4. Paste your OpenAI or Gemini API keys (they are encrypted locally).
 5. Click **Save Settings**. The current OCR processor will reload automatically.
 
-## Where Settings Are Stored
+## Where Local Settings Are Stored
+
+These locations are used only when `SCANNERAI_HOSTED_MODE=0`. The public hosted app and a plain `main`-branch Streamlit run default to hosted mode, where settings live only in the browser session until exported.
 
 | Platform | Location |
 | --- | --- |
@@ -25,11 +27,11 @@ The directory also contains:
 
 ## Hosted Mode (stateless servers)
 
-Set the environment variable `SCANNERAI_HOSTED_MODE=1` before launching Streamlit when you deploy ScannerAI to a shared or cloud host. In hosted mode:
+Set the environment variable `SCANNERAI_HOSTED_MODE=1` before launching Streamlit when you deploy ScannerAI to a shared or cloud host. The current `scripts/lcf_receipt_entry_streamlit.py` entrypoint also defaults this variable to `1` unless you override it. In hosted mode:
 
 - The server never writes `user_settings.json`, encryption keys, or uploaded credential/model files to disk. Settings exist only in memory for the current browser session.
 - File upload controls for classifier models, label encoders, and Google credentials are hidden because those assets cannot be stored safely on the host.
-- Users must provide a passphrase when they click **Save Settings**. ScannerAI encrypts the entire settings payload (including already encrypted API keys) with PBKDF2 + Fernet and offers a download named `scannerai_settings.json`.
+- Users must provide a passphrase when they click **Save Settings**. ScannerAI encrypts the entire settings payload, including API keys, with PBKDF2 + Fernet and offers a download named `scannerai_settings.json`.
 - To reuse settings, users upload the JSON file via **Import encrypted settings**, enter the same passphrase, and the values (and API keys) are restored for that session only.
 - If the passphrase is lost, the exported file cannot be decrypted. Re-enter the settings manually and download a new file.
 
@@ -39,7 +41,7 @@ This workflow keeps per-user API keys on their own machines even though the UI i
 
 - API keys are encrypted with `cryptography.Fernet`.
 - When available, the encryption key is stored in the OS keyring via the `keyring` library. Otherwise it is saved as `.scannerai.key` with `0600` permissions.
-- The JSON settings file never leaves your device; `.gitignore` excludes these files by default.
+- In local mode, `user_settings.json` never leaves your device; in hosted mode, settings leave the session only when you download an encrypted export. `.gitignore` excludes local settings files by default.
 
 ## Manual Editing
 
@@ -52,6 +54,9 @@ The settings file is JSON. Scalar values can be edited manually; API keys remain
   "enable_preprocessing": false,
   "save_processed_image": false,
   "enable_price_count": true,
+  "enable_item_capture": true,
+  "default_zoom": 0.5,
+  "vat_rate": 15.0,
   "classifier_model_path": "C:/models/classifier.sav",
   "label_encoder_path": "C:/models/encoder.pkl",
   "tesseract_cmd_path": "C:/Program Files/Tesseract-OCR/tesseract.exe",

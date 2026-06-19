@@ -2,9 +2,9 @@
 
 ## Done for you
 
-- **Repository**: Code from `https://github.com/rijff24/receiptAI.git` is in this folder. Current branch tracks its `origin` counterpart (`main` → `origin/main`, `dev` → `origin/dev`).
+- **Repository**: Code from `https://github.com/rijff24/receiptAI.git` is in this folder. This checkout is currently on `main`; `dev` is also available and tracks `origin/dev`.
 - **Virtual environment**: `scanner-venv` uses **Python 3.11** (required: scipy/scikit-learn have no Windows wheels for Python 3.14; 3.11 avoids Fortran build errors).
-- **Dependencies**: Installed in batches; the Streamlit app runs without chromadb/langchain (those are optional in pyproject).
+- **Dependencies**: Installed in `scanner-venv`; `requirements.txt` is the Streamlit runtime entrypoint and `pyproject.toml` contains the package metadata.
 
 ## One-time: install dependencies (if starting from scratch)
 
@@ -14,7 +14,7 @@ Use **Python 3.11** (not 3.14) so scipy/scikit-learn install from wheels. With t
 cd c:\dev\receiptAI_v1
 py -3.11 -m venv scanner-venv
 .\scanner-venv\Scripts\Activate.ps1
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
@@ -32,6 +32,7 @@ pre-commit install
 ```powershell
 cd c:\dev\receiptAI_v1
 .\scanner-venv\Scripts\Activate.ps1
+$env:SCANNERAI_HOSTED_MODE="0"
 streamlit run scripts/lcf_receipt_entry_streamlit.py
 ```
 

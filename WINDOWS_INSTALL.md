@@ -6,21 +6,20 @@ This guide describes how to build a Windows-friendly executable for ScannerAI. T
 
 ## For Developers
 
-This document targets contributors working on the **local desktop** experience (branches `local-dev` and `local-main`). Follow it when you need to regenerate `ScannerAI.exe`, test PyInstaller changes, or publish a new pre-release.
+This document targets contributors working on the **local desktop** experience in this repo. Follow it when you need to regenerate `ScannerAI.exe`, test PyInstaller changes, or publish a new pre-release.
 
 ## Branch workflow
 
-- `main`: hosted (cloud) production.
-- `cloud-dev`: upcoming hosted features before they land on `main`.
-- `local-dev`: active work on the Windows build/installer.
-- `local-main`: stable branch for published Windows releases.
+- `main`: hosted production and tagged local desktop releases.
+- `dev`: active integration work for hosted and local desktop changes before they land on `main`.
 
-The launcher script (`launch_scannerai.py`) and packaging configuration live on the local branches.
+The launcher script (`launch_scannerai.py`) and packaging configuration are present in this checkout.
 
 ## Prerequisites
 
 - Windows 10/11 64-bit.
 - Python 3.11.x installed (match the version used in `scanner-venv`).
+- Current build tooling installed: `python -m pip install --upgrade pip setuptools wheel`.
 - All project dependencies installed: `pip install -r requirements.txt`.
 - PyInstaller: `pip install pyinstaller`.
 
@@ -32,7 +31,7 @@ The launcher script (`launch_scannerai.py`) and packaging configuration live on 
 
    ```powershell
    .\scanner-venv\Scripts\Activate.ps1
-   python launch_scannerai.py --help   # should start Streamlit locally
+   python launch_scannerai.py   # should start Streamlit locally
    ```
 
 2. **Close any running ScannerAI.exe or Streamlit** before building. If the EXE is in use, PyInstaller will fail with `PermissionError: Access is denied` when writing `dist\ScannerAI.exe`.
@@ -77,11 +76,11 @@ PyInstaller does not always trace imports that are used only inside the `scanner
 
 ## Updating the build
 
-1. Make changes on `local-dev`.
+1. Make changes on `dev`.
 2. If you added or changed imports in `scannerai` or the Streamlit script, update `ScannerAI.spec` hidden imports if needed (see table above).
 3. Close any running ScannerAI.exe, then run `pyinstaller --noconfirm --clean ScannerAI.spec`.
 4. Run `dist\ScannerAI.exe` and confirm the app loads without `ModuleNotFoundError`.
-5. Merge `local-dev` → `local-main` when ready; tag a release for distribution.
+5. Merge `dev` → `main` when ready; tag a release for distribution.
 
-For hosted updates, continue using `cloud-dev` → `main`.
+For hosted updates, use the same `dev` → `main` flow.
 

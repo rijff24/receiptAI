@@ -21,9 +21,10 @@ Thank you for taking the time to contribute to ScannerAI! This project is a comm
 1. **Set up environment**
    ```bash
    git clone https://github.com/rijff24/receiptAI.git
-   cd receipt_scanner
+   cd receiptAI
    python -m venv scanner-venv
    scanner-venv\Scripts\activate  # or source scanner-venv/bin/activate
+   python -m pip install --upgrade pip setuptools wheel
    pip install -e ".[dev]"
    ```
 2. **Run tests & linters**
@@ -47,8 +48,6 @@ Do **not** open a public issue for security vulnerabilities. Instead, email `rij
 - Update the relevant `.md` files whenever you change behavior or configuration.
 - Architecture, deployment, and troubleshooting guides live in the repository root; keep them current when altering infrastructure.
 - Screenshots or GIFs are encouraged for UI/UX improvements.
-
-We appreciate your help keeping ScannerAI reliable and safe!
 
 We appreciate your help keeping ScannerAI reliable and safe!
 

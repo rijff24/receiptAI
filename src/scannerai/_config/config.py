@@ -58,6 +58,9 @@ def _load_settings_manager_overrides() -> Dict[str, Any]:
     except Exception:
         return {}
 
+    if manager.is_hosted_mode or not manager.settings_path.exists():
+        return {}
+
     overrides = manager.export_settings()
     overrides["OPENAI_API_KEY"] = manager.get_api_key("openai")
     overrides["GEMINI_API_KEY"] = manager.get_api_key("gemini")
@@ -92,9 +95,9 @@ def load_config(config_file: str):
         "OPENAI_API_KEY_PATH": _get_value("OPENAI_API_KEY_PATH", file_values),
         "GOOGLE_CREDENTIALS_PATH": _get_value("GOOGLE_CREDENTIALS_PATH", file_values),
         "TESSERACT_CMD_PATH": _get_value("TESSERACT_CMD_PATH", file_values),
-        "OPENAI_API_KEY": None,
-        "GEMINI_API_KEY": None,
-        "GOOGLE_API_KEY": None,
+        "OPENAI_API_KEY": _get_value("OPENAI_API_KEY", file_values),
+        "GEMINI_API_KEY": _get_value("GEMINI_API_KEY", file_values),
+        "GOOGLE_API_KEY": _get_value("GOOGLE_API_KEY", file_values),
         "HOSTED_MODE": _hosted_mode_enabled(),
     }
 
@@ -102,6 +105,8 @@ def load_config(config_file: str):
     for settings_key, config_key in SETTINGS_KEY_MAP.items():
         if settings_key in overrides and overrides[settings_key] is not None:
             value = overrides[settings_key]
+            if isinstance(value, str) and not value.strip():
+                continue
             if config_key == "OCR_MODEL":
                 config[config_key] = _coerce_int(value, config[config_key])
             elif isinstance(config[config_key], bool):

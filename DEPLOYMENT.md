@@ -7,18 +7,20 @@ This guide covers **hosted deployments** (Streamlit Cloud) and **self-hosted** S
 1. **Fork / push** the repository to your GitHub account.
 2. Visit [share.streamlit.io](https://share.streamlit.io) and select **New app**.
 3. Choose your repo, branch, and set the main file to `scripts/lcf_receipt_entry_streamlit.py`.
-4. Use `main` for production deployments and `cloud-dev` when smoke-testing new hosted features.
+4. Use `main` for production deployments and `dev` when smoke-testing upcoming changes.
 5. Add the following files to the repo root (already present in this project):
    - `requirements.txt`
    - `pyproject.toml`
    - `packages.txt` (installs system dependencies like `poppler-utils`, `libGL`, etc.)
-6. Set environment secrets (Settings → Secrets):
+6. Decide how credentials should be supplied:
+   - Recommended hosted mode: users enter their own API keys in **Application Settings**, then export/import `scannerai_settings.json` for reuse.
+   - Operator-managed fallback: set OS environment variables for centrally managed deployments.
    ```toml
    OPENAI_API_KEY="..."
    GEMINI_API_KEY="..."
-   GOOGLE_CREDENTIALS_JSON="..."  # optional; use file uploader when possible
+   GOOGLE_CREDENTIALS_PATH="/mounted/path/to/google-credentials.json"
    ```
-   > The hosted instance still supports uploading credentials via the sidebar; secrets only need to be set if you prefer environment variables.
+   > The current code reads environment variables through `os.environ`. If you use Streamlit Cloud secrets, make sure they are exposed as environment variables or enter keys through the UI.
 7. Deploy. Streamlit Cloud caches wheels, so the second deploy is significantly faster.
 
 ### Common Issues
@@ -37,24 +39,30 @@ git clone https://github.com/rijff24/receiptAI.git
 cd receiptAI
 python -m venv scanner-venv
 scanner-venv\Scripts\activate  # or source scanner-venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 streamlit run scripts/lcf_receipt_entry_streamlit.py
 ```
+
+Set `SCANNERAI_HOSTED_MODE=0` when you want persistent local settings on the server. Leave it as `1` for stateless hosted behavior.
 
 ### Environment Variables
 
 If you cannot use the in-app settings, set paths/keys via `.env` or shell variables:
 
 ```
+SCANNERAI_HOSTED_MODE=0
 OPENAI_API_KEY=...
 GEMINI_API_KEY=...
-GOOGLE_APPLICATION_CREDENTIALS=/abs/path/to/creds.json
+OPENAI_API_KEY_PATH=/abs/path/to/openai.key
+GEMINI_API_KEY_PATH=/abs/path/to/gemini.key
+GOOGLE_CREDENTIALS_PATH=/abs/path/to/google-credentials.json
 ```
 
 ### Headless Tips
 
-- Disable `st.file_uploader` and feed receipts programmatically via CLI if needed.
-- Use `config.txt` under `scannerai/_config/` to mirror the settings JSON.
+- For non-interactive automation, reuse the OCR processor classes directly instead of the Streamlit UI.
+- Use `config.txt` under `src/scannerai/_config/` to mirror the settings JSON.
 - For GPU instances, ensure the appropriate CUDA libraries are installed (OpenCV works fine on CPU for this workflow).
 
 ## Updating the Hosted App
