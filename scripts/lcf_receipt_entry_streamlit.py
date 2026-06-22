@@ -723,10 +723,24 @@ def autosave_results():
             st.warning(f"Autosave failed: {exc}")
 
 
+def ensure_receipt_widget_uid(result: dict) -> str:
+    """Return a stable per-result widget UID for receipt form keys."""
+    uid = result.get("_widget_uid")
+    if not uid:
+        counter = st.session_state.get("receipt_widget_uid_counter", 0) + 1
+        st.session_state.receipt_widget_uid_counter = counter
+        uid = f"receipt_{counter}"
+        result["_widget_uid"] = uid
+    return re.sub(r"[^A-Za-z0-9_]+", "_", str(uid))
+
+
+def receipt_widget_key(result: dict, field_name: str) -> str:
+    """Build a Streamlit key scoped to a specific receipt result."""
+    return f"{field_name}_{ensure_receipt_widget_uid(result)}"
+
+
 def clear_receipt_form_widget_state() -> None:
-    """Clear Streamlit widget state for receipt form fields so they refresh with new data after deletion."""
-    results = st.session_state.get("results", [])
-    max_index = len(results) + 15
+    """Clear Streamlit receipt form widget state so deleted data cannot leak."""
     prefixes = (
         "shop_name_", "total_amount_", "vat_amount_", "transaction_date_",
         "payment_mode_select_", "payment_mode_manual_", "notes_",
@@ -735,17 +749,11 @@ def clear_receipt_form_widget_state() -> None:
     )
     to_remove = []
     for key in list(st.session_state.keys()):
-        for prefix in prefixes:
-            if key.startswith(prefix):
-                suffix = key[len(prefix):]
-                parts = suffix.split("_")
-                if parts and parts[0].isdigit() and int(parts[0]) <= max_index:
-                    to_remove.append(key)
-                    break
+        if key.startswith(prefixes):
+            to_remove.append(key)
+            continue
         if key.startswith("delete_item_"):
-            parts = key.split("_")
-            if len(parts) >= 4 and parts[2].isdigit() and int(parts[2]) <= max_index:
-                to_remove.append(key)
+            to_remove.append(key)
     for k in to_remove:
         st.session_state.pop(k, None)
 
@@ -794,7 +802,11 @@ def delete_receipt_at(index: int) -> None:
     st.session_state["receipt_deleted_notice"] = f"Deleted {display_name}."
 
 
-def handle_calculate_vat(receipt_index: int, vat_state_key: str) -> None:
+def handle_calculate_vat(
+    receipt_index: int,
+    vat_state_key: str,
+    notice_state_key: Optional[str] = None,
+) -> None:
     """Callback to back-calculate VAT for a receipt."""
     results = st.session_state.get("results", [])
     if not results or receipt_index < 0 or receipt_index >= len(results):
@@ -805,7 +817,7 @@ def handle_calculate_vat(receipt_index: int, vat_state_key: str) -> None:
     app_settings = st.session_state.get("app_settings", {})
     configured_rate = app_settings.get("vat_rate", 15.0)
 
-    notice_key = f"vat_calc_notice_{receipt_index}"
+    notice_key = notice_state_key or f"vat_calc_notice_{receipt_index}"
 
     try:
         configured_rate = float(configured_rate)
@@ -834,15 +846,16 @@ def sync_current_receipt_form_state() -> None:
     if not results or current_index < 0 or current_index >= len(results):
         return
 
-    receipt_data = results[current_index].setdefault("receipt_data", {})
+    current_result = results[current_index]
+    receipt_data = current_result.setdefault("receipt_data", {})
 
-    shop_key = f"shop_name_{current_index}"
-    total_key = f"total_amount_{current_index}"
-    vat_key = f"vat_amount_{current_index}"
-    date_key = f"transaction_date_{current_index}"
-    payment_select_key = f"payment_mode_select_{current_index}"
-    payment_manual_key = f"payment_mode_manual_{current_index}"
-    notes_key = f"notes_{current_index}"
+    shop_key = receipt_widget_key(current_result, "shop_name")
+    total_key = receipt_widget_key(current_result, "total_amount")
+    vat_key = receipt_widget_key(current_result, "vat_amount")
+    date_key = receipt_widget_key(current_result, "transaction_date")
+    payment_select_key = receipt_widget_key(current_result, "payment_mode_select")
+    payment_manual_key = receipt_widget_key(current_result, "payment_mode_manual")
+    notes_key = receipt_widget_key(current_result, "notes")
 
     if shop_key in st.session_state:
         receipt_data["shop_name"] = st.session_state.get(shop_key)
@@ -875,6 +888,22 @@ def sync_current_receipt_form_state() -> None:
 
     if notes_key in st.session_state:
         receipt_data["notes"] = str(st.session_state.get(notes_key) or "").strip()
+
+
+def navigate_receipt(delta: int) -> None:
+    """Move to another receipt while preserving visible form edits."""
+    results = st.session_state.get("results", [])
+    if not results:
+        return
+
+    current_index = st.session_state.get("current_index", 0)
+    target_index = min(max(current_index + delta, 0), len(results) - 1)
+    if target_index == current_index:
+        return
+
+    sync_current_receipt_form_state()
+    st.session_state.current_index = target_index
+    autosave_results()
 
 
 def process_receipts_worker(files_data, ocr_processor, app_settings, event_queue, cancel_event):
@@ -953,9 +982,15 @@ def start_processing_thread(files_data):
 
 def drain_processing_events():
     """Apply pending processing events emitted by the worker."""
+    event_summary = {
+        "events_applied": False,
+        "result_added": False,
+        "completed": False,
+        "cancelled": False,
+    }
     event_queue = st.session_state.get("processing_event_queue")
     if not event_queue:
-        return
+        return event_summary
 
     events_applied = False
     while True:
@@ -965,6 +1000,7 @@ def drain_processing_events():
             break
 
         events_applied = True
+        event_summary["events_applied"] = True
         event_type = event.get("event")
         file_name = event.get("file")
 
@@ -975,6 +1011,7 @@ def drain_processing_events():
             result = event.get("result")
             if result:
                 st.session_state.results.append(result)
+                event_summary["result_added"] = True
                 update_receipt_status(file_name, "processed")
                 st.session_state.processing_payloads.pop(file_name, None)
                 queue_list = st.session_state.get("processing_queue", [])
@@ -1004,9 +1041,11 @@ def drain_processing_events():
             st.session_state.process_counts = counts
 
         elif event_type == "cancelled":
+            event_summary["cancelled"] = True
             st.session_state["processing_cancelled_notice"] = "Processing cancelled. Partial results are available below."
 
         elif event_type == "done":
+            event_summary["completed"] = True
             st.session_state.processing_active = False
             st.session_state.processing_thread = None
             st.session_state.processing_cancel_event = None
@@ -1019,8 +1058,84 @@ def drain_processing_events():
     if events_applied:
         update_process_counts()
 
+    return event_summary
 
-def render_processing_panel(placeholder):
+
+def set_processing_status_page(page: int) -> None:
+    """Set the processing status pagination page."""
+    st.session_state["processing_status_page"] = max(page, 0)
+
+
+def ordered_processing_status_entries(status_entries):
+    """Return statuses with the active receipt first."""
+    current_processing_file = next(
+        (entry["file"] for entry in status_entries if entry.get("status") == "processing"),
+        None,
+    )
+    if not current_processing_file:
+        return list(status_entries)
+    return (
+        [entry for entry in status_entries if entry["file"] == current_processing_file]
+        + [entry for entry in status_entries if entry["file"] != current_processing_file]
+    )
+
+
+def render_processing_status_entries(status_entries):
+    """Render paged receipt processing detail rows."""
+    if not status_entries:
+        return
+
+    ordered = ordered_processing_status_entries(status_entries)
+    if ordered and ordered[0].get("status") == "processing":
+        st.session_state["processing_status_page"] = 0
+
+    per_page = 8
+    total = len(ordered)
+    num_pages = max(1, (total + per_page - 1) // per_page)
+    page_key = "processing_status_page"
+    page = min(st.session_state.get(page_key, 0), num_pages - 1)
+    st.session_state[page_key] = page
+    start = page * per_page
+    page_entries = ordered[start : start + per_page]
+
+    st.write("Receipt status:")
+    for entry in page_entries:
+        status = entry.get("status", "unknown")
+        file_name = entry.get("file", "Receipt")
+        message = entry.get("message")
+        label = {
+            "processed": "Done",
+            "skipped": "Skipped",
+            "error": "Error",
+            "processing": "Processing",
+        }.get(status, status.capitalize())
+        text = f"{label}: {file_name} - {status.capitalize()}"
+        if message and status not in {"processed", "skipped"}:
+            text += f" ({message})"
+        st.write(text)
+
+    if num_pages > 1:
+        st.caption(f"Page {page + 1} of {num_pages} ({total} total)")
+        pcols = st.columns(2)
+        with pcols[0]:
+            st.button(
+                "Prev",
+                key="processing_status_prev",
+                disabled=page <= 0,
+                on_click=set_processing_status_page,
+                args=(page - 1,),
+            )
+        with pcols[1]:
+            st.button(
+                "Next",
+                key="processing_status_next",
+                disabled=page >= num_pages - 1,
+                on_click=set_processing_status_page,
+                args=(page + 1,),
+            )
+
+
+def render_processing_panel(expanded: Optional[bool] = None):
     """Render sidebar processing summary."""
     counts = st.session_state.get("process_counts", {"completed": 0, "total": 0})
     processing_active = st.session_state.get("processing_active", False)
@@ -1031,17 +1146,19 @@ def render_processing_panel(placeholder):
         None,
     )
 
-    has_activity = processing_active or counts.get("total") or queue
+    has_activity = processing_active or counts.get("total") or queue or receipt_status
     if not has_activity:
-        placeholder.empty()
         return
 
-    with placeholder.container():
-        st.subheader("Processing status")
-        total = max(counts.get("total", 0), 1)
+    if expanded is None:
+        expanded = processing_active
+
+    with st.expander("Processing status", expanded=expanded):
+        total_count = counts.get("total", 0)
+        total = max(total_count, 1)
         completed = counts.get("completed", 0)
         progress_ratio = min(max(completed / total, 0.0), 1.0)
-        st.progress(progress_ratio, text=f"Completed {completed} / {counts.get('total', 0)}")
+        st.progress(progress_ratio, text=f"Completed {completed} / {total_count}")
 
         if processing_active:
             if current_processing:
@@ -1049,10 +1166,78 @@ def render_processing_panel(placeholder):
             elif queue:
                 st.write(f"Currently processing **{queue[0]}**")
             else:
-                st.write("Finishing up current receipt…")
+                st.write("Finishing up current receipt...")
+
+        if not processing_active and total_count:
+            st.caption("Processing complete.")
 
         if queue:
             st.caption(f"{len(queue)} receipt(s) remaining in the queue.")
+
+        render_processing_status_entries(receipt_status)
+
+
+@st.fragment(run_every=0.5)
+def render_active_processing_sidebar():
+    """Refresh processing status without rerunning the review workspace."""
+    had_results = bool(st.session_state.get("results"))
+    was_processing = st.session_state.get("processing_active", False)
+    event_summary = drain_processing_events()
+    processing_active = st.session_state.get("processing_active", False)
+
+    render_sidebar_receipt_navigation()
+    if st.session_state.get("results"):
+        st.divider()
+
+    render_processing_panel(expanded=processing_active)
+
+    if processing_active:
+        if st.button(
+            "Cancel Processing",
+            type="secondary",
+            width="stretch",
+            help="Stop processing remaining receipts and keep partial results.",
+        ):
+            if cancel_processing():
+                st.rerun()
+
+    if event_summary["result_added"] and not had_results:
+        st.rerun()
+
+    if was_processing and not st.session_state.get("processing_active", False):
+        st.rerun()
+
+
+def render_sidebar_receipt_navigation() -> None:
+    """Render receipt navigation at the top of the sidebar."""
+    results = st.session_state.get("results", [])
+    if not results:
+        return
+
+    current_index = min(st.session_state.get("current_index", 0), len(results) - 1)
+    st.session_state.current_index = current_index
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button(
+            "Previous",
+            key="sidebar_previous_receipt",
+            width="stretch",
+            disabled=current_index <= 0,
+            on_click=navigate_receipt,
+            args=(-1,),
+        )
+    with col2:
+        st.button(
+            "Next",
+            key="sidebar_next_receipt",
+            width="stretch",
+            disabled=current_index >= len(results) - 1,
+            on_click=navigate_receipt,
+            args=(1,),
+        )
+    st.write(f"Receipt {current_index + 1} of {len(results)}")
+
+
 def update_receipt_status(file_name, status, message=None):
     """Update or append the processing status for a receipt."""
     found = False
@@ -1368,26 +1553,49 @@ def main():
 
     # Sidebar for file upload and navigation
     with st.sidebar:
-        st.header("Upload & Navigation")
+        processing_active = st.session_state.get("processing_active", False)
+        has_results = bool(st.session_state.results)
+        if has_results and not processing_active:
+            render_sidebar_receipt_navigation()
+            st.divider()
 
-        # File uploader - always visible
-        # Use a key that can be reset to clear the uploader
-        uploader_key = st.session_state.get("file_uploader_key", "file_uploader")
-        uploaded_files = st.file_uploader(
-            "Upload receipt images",
-            type=["png", "jpg", "jpeg", "pdf"],
-            accept_multiple_files=True,
-            key=uploader_key,
-        )
+        if processing_active:
+            render_active_processing_sidebar()
+        else:
+            render_processing_panel()
+            st.header("Upload & Navigation")
 
-        # Process button - always visible when files are uploaded, but disabled during processing
-        if uploaded_files:
-            processing_active = st.session_state.get("processing_active", False)
-            if st.button(
+            # Use a key that can be reset to clear the uploader.
+            st.markdown(
+                """
+                <style>
+                    div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {
+                        transition: background-color 0.12s ease, border-color 0.12s ease,
+                            box-shadow 0.12s ease, transform 0.12s ease;
+                    }
+                    div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"]:hover,
+                    div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"]:focus-within {
+                        background-color: #eef7ff;
+                        border-color: #2d7ff9;
+                        box-shadow: 0 0 0 2px rgba(45, 127, 249, 0.16);
+                        transform: translateY(-1px);
+                    }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            uploader_key = st.session_state.get("file_uploader_key", "file_uploader")
+            uploaded_files = st.file_uploader(
+                "Upload receipt images",
+                type=["png", "jpg", "jpeg", "pdf"],
+                accept_multiple_files=True,
+                key=uploader_key,
+            )
+
+            if uploaded_files and st.button(
                 "Process Uploaded Files",
-                disabled=processing_active,
                 width="stretch",
-                help="Start processing uploaded files" if not processing_active else "Processing in progress..."
+                help="Start processing uploaded files",
             ):
                 files_data = [
                     {"name": file.name, "data": file.getvalue()}
@@ -1414,26 +1622,10 @@ def main():
                 force_rerun()
 
         # Home button - show when results exist and processing is complete
-        has_results = bool(st.session_state.results)
         processing_active = st.session_state.get("processing_active", False)
-        queue_has_items = bool(st.session_state.get("processing_queue", []))
-        processing_queue_empty = not queue_has_items
 
-        if processing_active and queue_has_items:
-            if st.button(
-                "Cancel Processing",
-                type="secondary",
-                width="stretch",
-                help="Stop processing remaining receipts and keep partial results.",
-            ):
-                if cancel_processing():
-                    force_rerun()
-
-        processing_panel_placeholder = st.empty()
-        render_processing_panel(processing_panel_placeholder)
-
-        # Show buttons when we have results and processing is not active (or queue is empty)
-        processing_complete = not processing_active or (processing_queue_empty and has_results)
+        # Show controls again after active processing has finished.
+        processing_complete = not processing_active
         if has_results and processing_complete:
             if st.button("🏠 Home", width="stretch", help="Return to home screen and clear current results"):
                 st.session_state.results = []
@@ -1449,23 +1641,10 @@ def main():
                 st.rerun()
             st.divider()
         
-        # Navigation with state preservation - show when results exist and processing is complete
-        if has_results:
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Previous") and st.session_state.current_index > 0:
-                    # Save current state before navigation
-                    st.session_state.current_index -= 1
-            with col2:
-                if st.button("Next") and st.session_state.current_index < len(st.session_state.results) - 1:
-                    # Save current state before navigation
-                    st.session_state.current_index += 1
-            st.write(f"Receipt {st.session_state.current_index + 1} of {len(st.session_state.results)}")
-
         # Export options - show when results exist and processing is complete
         if has_results and processing_complete:
             st.header("Export Data")
-            export_format = st.selectbox("Export format", ["JSON", "CSV"])
+            export_format = st.selectbox("Export format", ["CSV", "JSON"])
 
             # Get item capture setting
             settings_manager = get_settings_manager()
@@ -1505,64 +1684,6 @@ def main():
                 mime="application/zip",
                 width="stretch",
             )
-        # Only show "Completed */*" when processing is active or just completed (and on first image)
-        counts = st.session_state.process_counts
-        processing_active = st.session_state.get("processing_active", False)
-        has_results_main = bool(st.session_state.results)
-        is_first_image_main = st.session_state.current_index == 0
-        
-        if counts["total"] > 0 and (processing_active or (has_results_main and is_first_image_main)):
-            st.markdown(
-                f"<div style='text-align:center; font-weight:600;'>Completed {counts['completed']} / {counts['total']}</div>",
-                unsafe_allow_html=True,
-            )
-
-        if st.session_state.receipt_status:
-            status_entries = st.session_state.receipt_status
-            current_processing_file = next(
-                (e["file"] for e in status_entries if e.get("status") == "processing"),
-                None,
-            )
-            ordered = (
-                [e for e in status_entries if e["file"] == current_processing_file]
-                + [e for e in status_entries if e["file"] != current_processing_file]
-            ) if current_processing_file else list(status_entries)
-
-            per_page = 8
-            total = len(ordered)
-            num_pages = max(1, (total + per_page - 1) // per_page)
-            page_key = "processing_status_page"
-            if page_key not in st.session_state:
-                st.session_state[page_key] = 0
-            if current_processing_file:
-                st.session_state[page_key] = 0
-            page = min(st.session_state[page_key], num_pages - 1)
-            start = page * per_page
-            page_entries = ordered[start : start + per_page]
-
-            st.write("Processing status:")
-            for entry in page_entries:
-                status = entry["status"]
-                file_name = entry["file"]
-                message = entry.get("message")
-                bullet = "🟢" if status == "processed" else ("⚠️" if status == "skipped" else "🔴")
-                text = f"{bullet} {file_name} — {status.capitalize()}"
-                if message and status not in {"processed", "skipped"}:
-                    text += f" ({message})"
-                st.write(text)
-
-            if num_pages > 1:
-                st.caption(f"Page {page + 1} of {num_pages} ({total} total)")
-                pcols = st.columns(2)
-                with pcols[0]:
-                    if st.button("← Prev", key="processing_status_prev") and page > 0:
-                        st.session_state[page_key] = page - 1
-                        st.rerun()
-                with pcols[1]:
-                    if st.button("Next →", key="processing_status_next") and page < num_pages - 1:
-                        st.session_state[page_key] = page + 1
-                        st.rerun()
-
         st.divider()
         if st.button(
             "Exit Application",
@@ -1685,10 +1806,12 @@ def main():
                     }}
                     #{viewer_id} img {{
                         display: block;
+                        height: auto;
+                        max-width: none;
                         transform-origin: 0 0;
                         user-select: none;
                         -webkit-user-drag: none;
-                        transition: transform 0.08s ease-out;
+                        transition: transform 0.08s ease-out, width 0.08s ease-out;
                     }}
                     .zoom-controls {{
                         position: absolute;
@@ -1749,6 +1872,7 @@ def main():
                         let scale = INITIAL_SCALE;
                         let offsetX = 0;
                         let offsetY = 0;
+                        let baseImageWidth = 0;
                         let isPanning = false;
                         let startX = 0;
                         let startY = 0;
@@ -1761,6 +1885,15 @@ def main():
                         let pendingSaveFrame = null;
 
                         const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+                        const syncImageBaseSize = () => {{
+                            const rect = viewer.getBoundingClientRect();
+                            const availableWidth = Math.max(rect.width - 24, 240);
+                            baseImageWidth = availableWidth;
+                        }};
+                        const getDisplayWidth = () => {{
+                            syncImageBaseSize();
+                            return baseImageWidth * scale;
+                        }};
                         const computePreferredViewerHeight = () => {{
                             const MIN_HEIGHT = 720;
                             const MAX_HEIGHT = 1700;
@@ -1817,7 +1950,9 @@ def main():
                         }};
 
                         const applyTransform = () => {{
-                            img.style.transform = `translate(${{offsetX}}px, ${{offsetY}}px) scale(${{scale}})`;
+                            img.style.width = `${{getDisplayWidth()}}px`;
+                            img.style.height = "auto";
+                            img.style.transform = `translate(${{offsetX}}px, ${{offsetY}}px)`;
                             if (info) {{
                                 info.textContent = `${{Math.round(scale * 100)}}%`;
                             }}
@@ -1840,13 +1975,10 @@ def main():
 
                         const centerImageHorizontalOnly = () => {{
                             const rect = viewer.getBoundingClientRect();
-                            const naturalWidth = img.naturalWidth || rect.width;
-                            const naturalHeight = img.naturalHeight || rect.height;
-                            const displayWidth = naturalWidth * scale;
-                            const displayHeight = naturalHeight * scale;
-                            offsetX = (rect.width - displayWidth) / 2;
-                            const extraY = rect.height - displayHeight;
-                            offsetY = extraY > 0 ? extraY / 2 : 0;
+                            const viewportWidth = viewer.clientWidth || rect.width;
+                            const displayWidth = getDisplayWidth();
+                            offsetX = Math.max((viewportWidth - displayWidth) / 2, 0);
+                            offsetY = 0;
                             applyTransform();
                         }};
 
@@ -1861,12 +1993,6 @@ def main():
                                 if (parsed && typeof parsed.scale === "number") {{
                                     scale = clamp(parsed.scale, MIN_SCALE, MAX_SCALE);
                                 }}
-                                if (parsed && typeof parsed.offsetX === "number") {{
-                                    offsetX = parsed.offsetX;
-                                }}
-                                if (parsed && typeof parsed.offsetY === "number") {{
-                                    offsetY = parsed.offsetY;
-                                }}
                                 return true;
                             }} catch (err) {{
                                 console.warn("Failed to load viewer state", err);
@@ -1879,8 +2005,6 @@ def main():
                                 const payload = JSON.stringify({{
                                     height: viewer.offsetHeight,
                                     scale,
-                                    offsetX,
-                                    offsetY,
                                 }});
                                 sessionStorage.setItem(STORAGE_KEY, payload);
                             }} catch (err) {{
@@ -2062,12 +2186,9 @@ def main():
                         viewer.addEventListener("pointercancel", releaseTouch);
 
                         const initialize = () => {{
-                            const restored = loadViewerPreferences();
-                            if (restored) {{
-                                applyTransform();
-                            }} else {{
-                                centerImageHorizontalOnly();
-                            }}
+                            syncImageBaseSize();
+                            loadViewerPreferences();
+                            centerImageHorizontalOnly();
                             updateFrameHeight();
                         }};
 
@@ -2079,6 +2200,12 @@ def main():
 
                         if (window.ResizeObserver) {{
                             const ro = new ResizeObserver(() => {{
+                                const previousBaseWidth = baseImageWidth;
+                                syncImageBaseSize();
+                                if (previousBaseWidth && Math.abs(previousBaseWidth - baseImageWidth) > 1) {{
+                                    centerImageHorizontalOnly();
+                                    return;
+                                }}
                                 saveViewerPreferences();
                                 updateFrameHeight();
                             }});
@@ -2103,10 +2230,19 @@ def main():
             # Shop details
             receipt_data = current_result["receipt_data"]
 
-            action_cols = st.columns([3, 1])
+            action_cols = st.columns([1, 1.4, 1])
+            with action_cols[0]:
+                st.button(
+                    "Previous",
+                    key=f"main_previous_receipt_{current_index}",
+                    width="stretch",
+                    disabled=current_index <= 0,
+                    on_click=navigate_receipt,
+                    args=(-1,),
+                )
             with action_cols[1]:
                 if st.button(
-                    "🗑 Delete Receipt",
+                    "Delete Receipt",
                     key=f"delete_receipt_{current_index}",
                     type="secondary",
                     width="stretch",
@@ -2114,15 +2250,25 @@ def main():
                 ):
                     delete_receipt_at(current_index)
                     force_rerun()
+            with action_cols[2]:
+                st.button(
+                    "Next",
+                    key=f"main_next_receipt_{current_index}",
+                    width="stretch",
+                    disabled=current_index >= len(st.session_state.results) - 1,
+                    on_click=navigate_receipt,
+                    args=(1,),
+                )
 
             # Create unique keys for each input field
-            shop_key = f"shop_name_{current_index}"
-            total_key = f"total_amount_{current_index}"
-            vat_key = f"vat_amount_{current_index}"
-            date_key = f"transaction_date_{current_index}"
-            payment_select_key = f"payment_mode_select_{current_index}"
-            payment_manual_key = f"payment_mode_manual_{current_index}"
-            notes_key = f"notes_{current_index}"
+            shop_key = receipt_widget_key(current_result, "shop_name")
+            total_key = receipt_widget_key(current_result, "total_amount")
+            vat_key = receipt_widget_key(current_result, "vat_amount")
+            date_key = receipt_widget_key(current_result, "transaction_date")
+            payment_select_key = receipt_widget_key(current_result, "payment_mode_select")
+            payment_manual_key = receipt_widget_key(current_result, "payment_mode_manual")
+            notes_key = receipt_widget_key(current_result, "notes")
+            vat_notice_key = receipt_widget_key(current_result, "vat_calc_notice")
 
             # 1. Shop Name
             new_shop_name = st.text_input(
@@ -2173,15 +2319,17 @@ def main():
                 st.markdown("<div style='padding-top:11%'></div>", unsafe_allow_html=True)
                 st.button(
                     "Calculate VAT",
-                    key=f"calculate_vat_{current_index}",
+                    key=receipt_widget_key(current_result, "calculate_vat"),
                     width="stretch",
                     help="Use the configured VAT rate to back-calculate VAT from the total amount.",
                     on_click=handle_calculate_vat,
-                    kwargs={"receipt_index": current_index, "vat_state_key": vat_key},
+                    kwargs={
+                        "receipt_index": current_index,
+                        "vat_state_key": vat_key,
+                        "notice_state_key": vat_notice_key,
+                    },
                 )
-            vat_notice = st.session_state.pop(
-                f"vat_calc_notice_{current_index}", None
-            )
+            vat_notice = st.session_state.pop(vat_notice_key, None)
             if vat_notice:
                 # Show the warning below the entire VAT control row for better visibility.
                 st.warning(vat_notice)
@@ -2282,7 +2430,7 @@ def main():
                         with delete_cols[col_idx]:
                             if st.button(
                                 f"Delete #{idx+1}",
-                                key=f"delete_item_{current_index}_{idx}",
+                                key=f"{receipt_widget_key(current_result, 'delete_item')}_{idx}",
                                 width="stretch",
                             ):
                                 items.pop(idx)
@@ -2297,14 +2445,35 @@ def main():
                 with st.expander("➕ Add New Item", expanded=False):
                     new_item_cols = st.columns(2)
                     with new_item_cols[0]:
-                        new_item_name = st.text_input("Item Name", key=f"new_item_name_{current_index}")
-                        new_item_price = st.text_input("Price", key=f"new_item_price_{current_index}", help="Enter price as number (e.g., 5.99)")
-                        new_item_coicop = st.text_input("COICOP Code", key=f"new_item_coicop_{current_index}")
+                        new_item_name = st.text_input(
+                            "Item Name",
+                            key=receipt_widget_key(current_result, "new_item_name"),
+                        )
+                        new_item_price = st.text_input(
+                            "Price",
+                            key=receipt_widget_key(current_result, "new_item_price"),
+                            help="Enter price as number (e.g., 5.99)",
+                        )
+                        new_item_coicop = st.text_input(
+                            "COICOP Code",
+                            key=receipt_widget_key(current_result, "new_item_coicop"),
+                        )
                     with new_item_cols[1]:
-                        new_item_coicop_desc = st.text_input("COICOP Description", key=f"new_item_coicop_desc_{current_index}")
-                        new_item_confidence = st.text_input("Confidence", key=f"new_item_confidence_{current_index}", help="Optional: confidence score")
+                        new_item_coicop_desc = st.text_input(
+                            "COICOP Description",
+                            key=receipt_widget_key(current_result, "new_item_coicop_desc"),
+                        )
+                        new_item_confidence = st.text_input(
+                            "Confidence",
+                            key=receipt_widget_key(current_result, "new_item_confidence"),
+                            help="Optional: confidence score",
+                        )
                     
-                    if st.button("Add Item", key=f"add_item_{current_index}", width="stretch"):
+                    if st.button(
+                        "Add Item",
+                        key=receipt_widget_key(current_result, "add_item"),
+                        width="stretch",
+                    ):
                         if new_item_name.strip():
                             new_item = {
                                 "item_name": new_item_name.strip(),
@@ -2325,10 +2494,6 @@ def main():
                     
     else:
         st.info("Upload receipt images to begin processing")
-        
-    if st.session_state.get("processing_active"):
-        time.sleep(0.5)
-        st.rerun()
         
 if __name__ == "__main__":
     main()
